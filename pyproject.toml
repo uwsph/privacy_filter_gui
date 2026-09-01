@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opf-gui"
+version = "1.0.0"
+description = "Desktop GUI for OpenAI Privacy Filter (openai/privacy-filter): local PII detection and redaction."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "customtkinter>=5.2.2",
+]
+
+[project.optional-dependencies]
+# The upstream engine is distributed from GitHub, not PyPI.
+model = [
+  "opf @ git+https://github.com/openai/privacy-filter",
+]
+# Drag & drop of files/folders onto the editor (the app works without it).
+dnd = [
+  "tkinterdnd2>=0.3.0",
+]
+
+[project.scripts]
+opf-gui = "opf_gui.__main__:main"
+
+[tool.setuptools]
+packages = ["opf_gui"]

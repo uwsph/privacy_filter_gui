@@ -1,0 +1,15 @@
+# GUI toolkit (pip installable, needs a Python build that includes Tk)
+customtkinter>=5.2.2
+
+# The redaction engine itself is NOT on PyPI - install from the repository:
+#   git clone https://github.com/openai/privacy-filter
+#   cd privacy-filter && pip install -e .
+# That pulls in torch, huggingface_hub, tiktoken, numpy and safetensors and
+# provides the `opf` package this GUI wraps. The GUI also runs without it in
+# Demo mode (`python -m opf_gui --demo`).
+
+# Optional: drag & drop text files or folders onto the editor. Left commented so
+# `pip install -r requirements.txt` never pulls in a native library you may not
+# want; without it the app still runs, `Open` remains the way in, and the log
+# says drag & drop is switched off.
+#   pip install tkinterdnd2        # >= 0.3.0
