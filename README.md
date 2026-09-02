@@ -159,4 +159,4 @@ output leaves the building.
 
 ## Colophon
 
-This project was created using `prompt.md` with unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL in Pi (pi.dev) on a Strix Halo (Max+ 395) system with 128 GB shared RAM running CachOS. A little more back and forth with the agent cleaned up minor bugs and the UI layout.
+This project was created using `prompt.md` with unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL in Pi (pi.dev) on a Strix Halo (Max+ 395) system with 128 GB shared RAM running CachyOS. A little more back and forth with the agent cleaned up minor bugs and the UI layout.
