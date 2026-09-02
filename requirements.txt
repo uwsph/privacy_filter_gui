@@ -11,5 +11,6 @@ customtkinter>=5.2.2
 # Optional: drag & drop text files or folders onto the editor. Left commented so
 # `pip install -r requirements.txt` never pulls in a native library you may not
 # want; without it the app still runs, `Open` remains the way in, and the log
-# says drag & drop is switched off.
+# says drag & drop is switched off. `python -m opf_gui --check` lists it alongside
+# the other dependencies, so you can see whether it is picked up.
 #   pip install tkinterdnd2        # >= 0.3.0

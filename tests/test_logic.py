@@ -480,6 +480,45 @@ class TestThreadSafetySurface(unittest.TestCase):
         self.assertIn("ok", result.stdout)
 
 
+class TestEnvironmentReport(unittest.TestCase):
+    """`python -m opf_gui --check` must account for every declared dependency."""
+
+    #: every third-party package the app can use, optional ones included
+    DEPENDENCIES = ("tkinter", "customtkinter", "tkinterdnd2", "torch", "huggingface_hub")
+
+    def test_report_names_every_dependency(self) -> None:
+        from opf_gui.__main__ import environment_report
+
+        report = environment_report(Settings())
+        for module in self.DEPENDENCIES:
+            self.assertIn(module, report)
+
+    def test_report_is_headless(self) -> None:
+        """The report itself must build without a display or a GUI toolkit."""
+        import subprocess
+
+        code = (
+            "import sys; sys.modules['tkinter']=None; sys.modules['customtkinter']=None;"
+            "from opf_gui.__main__ import environment_report;"
+            "from opf_gui.models import Settings;"
+            "print(environment_report(Settings()))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).resolve().parents[1]),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for module in self.DEPENDENCIES:
+            self.assertIn(module, result.stdout)
+
+    def test_probe_reports_missing_packages(self) -> None:
+        from opf_gui.__main__ import _probe
+
+        self.assertEqual(_probe("opf_gui_definitely_not_installed"), "missing")
+
+
 def _srgb(value: int) -> float:
     channel = value / 255
     return channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4

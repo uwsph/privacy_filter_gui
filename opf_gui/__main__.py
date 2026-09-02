@@ -66,6 +66,7 @@ def environment_report(settings: Settings) -> str:
     for module, purpose in (
         ("tkinter", "GUI toolkit"),
         ("customtkinter", "themed widgets"),
+        ("tkinterdnd2", "drag & drop (optional)"),
         ("torch", "model inference"),
         ("huggingface_hub", "checkpoint download"),
     ):
