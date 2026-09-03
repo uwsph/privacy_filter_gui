@@ -202,6 +202,48 @@ class PrivacyFilterApp(ctk.CTk):
         self.device_switch.set(self.settings.device)
         self.theme_switch.set("light" if self.settings.appearance == "light" else "dark")
 
+    def _apply_menu_theme(self) -> None:
+        """Update native Tkinter menu bar colors to match the active theme."""
+        if not getattr(self, "menu_bar", None):
+            return
+
+        mode = self._current_mode()
+        
+        # Define palette according to light/dark mode
+        if mode == "dark":
+            bg_color = "#2b2b2b"
+            fg_color = "#ffffff"
+            active_bg = "#1f538d"
+            active_fg = "#ffffff"
+        else:
+            bg_color = "#dbdbdb"
+            fg_color = "#000000"
+            active_bg = "#3b8ed0"
+            active_fg = "#ffffff"
+
+        # Apply styling to the root menu bar
+        self.menu_bar.configure(
+            bg=bg_color,
+            fg=fg_color,
+            activebackground=active_bg,
+            activeforeground=active_fg,
+            bd=0,
+            activeborderwidth=0,
+        )
+
+        # Apply styling recursively to all submenus/dropdowns
+        for child in self.menu_bar.winfo_children():
+            if isinstance(child, tk.Menu):
+                child.configure(
+                    bg=bg_color,
+                    fg=fg_color,
+                    activebackground=active_bg,
+                    activeforeground=active_fg,
+                    selectcolor=active_bg,
+                    bd=1,
+                    relief="flat",
+                )
+
     def _tab_strip_height(self) -> int:
         """Pixels CTkTabview spends above its content area, plus its inner padding.
 
@@ -480,6 +522,9 @@ class PrivacyFilterApp(ctk.CTk):
         for box in (self.json_box, self.batch_box, self.log_box):
             box.configure(fg_color=colors["bg"], text_color=colors["fg"])
         self.console.apply_appearance(mode)
+
+        # Apply theme colors to the menu bar
+        self._apply_menu_theme()
 
     def change_font_size(self, delta: int) -> None:
         size = max(8, min(24, int(self.settings.font_size) + delta))
