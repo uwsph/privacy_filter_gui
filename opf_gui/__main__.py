@@ -81,7 +81,10 @@ def environment_report(settings: Settings) -> str:
             "cd privacy-filter && pip install -e ."
         )
     elif not status.checkpoint_present:
-        lines.append("Next step: the first 'Load model' downloads the checkpoint from HuggingFace.")
+        lines.append(
+            "Next step: the first model load (toolbar Model -> 'load', or Run -> Load model) "
+            "downloads the checkpoint from HuggingFace."
+        )
     else:
         lines.append("Ready: run 'python -m opf_gui'.")
     if settings.engine == "demo":

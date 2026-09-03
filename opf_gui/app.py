@@ -59,6 +59,13 @@ class PrivacyFilterApp(ctk.CTk):
         self.current_source: str | None = None
         self._live_job: str | None = None
         self._quitting = False
+        #: Load state of the model engine, kept in step with the worker (see MSG_STATE).
+        self.model_loaded = False
+        #: While a load/unload job runs, the Model toggle shows the requested target.
+        self._model_pending: bool | None = None
+        #: A model inference pass has run since the backend was built. Drives the
+        #: "Warm up model" button: solid while cold, ghosted once warm.
+        self.model_warm = False
 
         try:
             ctk.set_default_color_theme(self.settings.color_theme)
@@ -170,6 +177,8 @@ class PrivacyFilterApp(ctk.CTk):
         controls = [
             ("Engine", ctk.CTkSegmentedButton(
                 inner, values=["model", "demo"], width=150, command=self._on_engine_choice)),
+            ("Model", ctk.CTkSegmentedButton(
+                inner, values=["load", "unload"], width=150, command=self._on_model_choice)),
             ("Labels", ctk.CTkSegmentedButton(
                 inner, values=["typed", "redacted"], width=150, command=self._on_output_mode_choice)),
             ("Device", ctk.CTkSegmentedButton(
@@ -182,22 +191,16 @@ class PrivacyFilterApp(ctk.CTk):
                 row=0, column=column, sticky="w", padx=(0, 14)
             )
             widget.grid(row=1, column=column, sticky="w", padx=(0, 14), pady=(1, 0))
-        (self.engine_switch, self.output_switch, self.device_switch,
+        (self.engine_switch, self.model_switch, self.output_switch, self.device_switch,
          self.theme_switch) = (widget for _caption, widget in controls)
-
-        actions = ctk.CTkFrame(inner, fg_color="transparent")
-        actions.grid(row=0, column=6, rowspan=2, sticky="e")
-        ctk.CTkButton(actions, text="Settings", width=96, height=30, command=self.open_settings).pack(
-            side="left", padx=(0, 8)
-        )
-        self.load_button = ctk.CTkButton(
-            actions, text="Load model", width=112, height=30, command=self.load_model
-        )
-        self.load_button.pack(side="left")
-        inner.grid_columnconfigure(6, weight=1)
+        # Trailing spacer column keeps the switch row pinned to the left edge.
+        # ("Settings" and "Load model" used to sit here; settings live in
+        # View -> Advanced settings..., and load/unload is the Model toggle.)
+        inner.grid_columnconfigure(len(controls) + 1, weight=1)
 
         # reflect persisted settings
         self.engine_switch.set(self.settings.engine)
+        self.model_switch.set("load" if self.model_loaded else "unload")
         self.output_switch.set(self.settings.output_mode)
         self.device_switch.set(self.settings.device)
         self.theme_switch.set("light" if self.settings.appearance == "light" else "dark")
@@ -470,16 +473,13 @@ class PrivacyFilterApp(ctk.CTk):
             sidebar, text="", font=self.small_font, anchor="w", justify="left", wraplength=210
         )
         self.engine_info_label.grid(row=2, column=0, sticky="ew", padx=4, pady=(10, 4))
-        self.unload_button = ctk.CTkButton(
-            sidebar, text="Unload model (free RAM)", width=200, height=28,
-            command=self.unload_model, **theme.ghost_button(),
-        )
-        self.unload_button.grid(row=3, column=0, sticky="ew", padx=4, pady=(4, 0))
+        # Model load/unload moved to the toolbar toggle, so only warm-up is left here.
+        # Built active (solid); _style_warmup_button() ghosts it once the model is warm.
         self.warmup_button = ctk.CTkButton(
             sidebar, text="Warm up model", width=200, height=28,
-            command=self.warmup_model, **theme.ghost_button(),
+            command=self.warmup_model,
         )
-        self.warmup_button.grid(row=4, column=0, sticky="ew", padx=4, pady=(6, 0))
+        self.warmup_button.grid(row=3, column=0, sticky="ew", padx=4, pady=(4, 0))
 
     def _build_statusbar(self) -> None:
         bar = ctk.CTkFrame(self, corner_radius=0)
@@ -525,6 +525,7 @@ class PrivacyFilterApp(ctk.CTk):
 
         # Apply theme colors to the menu bar
         self._apply_menu_theme()
+        self._style_warmup_button()  # keeps the warm/cold face on the current palette
 
     def change_font_size(self, delta: int) -> None:
         size = max(8, min(24, int(self.settings.font_size) + delta))
@@ -585,10 +586,18 @@ class PrivacyFilterApp(ctk.CTk):
             done, total = payload  # type: ignore[misc]
             self.batch_status.configure(text=f"{done}/{total} files processed")
         elif kind == MSG_STATE:
+            if isinstance(payload, dict):
+                self.model_loaded = bool(payload.get("loaded", False))
+                self.model_warm = bool(payload.get("warm", False))
+            self._sync_model_switch()
+            self._style_warmup_button()
             self._refresh_engine_info()
         elif kind == MSG_DONE:
             self._set_busy(False)
             self.set_status("Ready")
+            self._model_pending = None
+            self._sync_model_switch()
+            self._style_warmup_button()
             self._refresh_engine_info()
 
     def _set_busy(self, busy: bool) -> None:
@@ -638,6 +647,7 @@ class PrivacyFilterApp(ctk.CTk):
         self.settings.engine = engine
         self.engine_switch.set(engine)
         self.engine.request_backend_rebuild()
+        self._forget_model()  # the rebuild drops any weights held in RAM
         self._save_settings()
         if notify:
             self.log(f"Engine -> {engine}")
@@ -655,6 +665,64 @@ class PrivacyFilterApp(ctk.CTk):
                 messagebox.showwarning(APP_TITLE, INSTALL_HINT, parent=self)
             elif not status.checkpoint_present:
                 self.log(status.detail)
+
+    def _on_model_choice(self, value: str) -> None:
+        """Toolbar Model toggle: `load` pulls the checkpoint into RAM, `unload` frees it."""
+        want_loaded = value == "load"
+        if self._model_pending is not None:
+            self.set_status("Model job already running - Esc cancels it")
+            self._sync_model_switch()
+            return
+        if want_loaded == self.model_loaded:
+            self._sync_model_switch()
+            return
+        self._model_pending = want_loaded  # claimed first: an inline engine finishes below
+        started = self.load_model() if want_loaded else self.unload_model()
+        if not started:
+            self._model_pending = None
+        self._sync_model_switch()  # optimistic while it runs, truthful after
+
+    def _forget_model(self) -> None:
+        """Mark the model as not loaded (a backend rebuild throws the weights away).
+
+        An in-flight load/unload claim is left alone: its MSG_DONE re-syncs the
+        toggle from the worker's report either way.
+        """
+        self.model_loaded = False
+        self.model_warm = False
+        self._sync_model_switch()
+        self._style_warmup_button()
+
+    def _sync_model_switch(self) -> None:
+        """Point the Model toggle at the real load state, or at the target of a
+        load/unload job still in flight."""
+        state = self.model_loaded if self._model_pending is None else self._model_pending
+        self.model_switch.set("load" if state else "unload")
+
+    def _active_button_face(self) -> dict[str, object]:
+        """Colours of a normal (active) button, read from the live CTkButton theme."""
+        wanted = ("fg_color", "hover_color", "text_color", "border_color", "border_width")
+        colors: dict[str, object] = {}
+        try:
+            from customtkinter.windows.widgets.theme.theme_manager import ThemeManager  # noqa: PLC0415
+
+            face = ThemeManager.theme.get("CTkButton", {})
+            for key in wanted:
+                if key in face:
+                    colors[key] = list(face[key]) if isinstance(face[key], list) else face[key]
+        except Exception:  # noqa: BLE001 - stubbed or relocated internals
+            colors = {}
+        return {**theme.ACTIVE_BUTTON, **colors}
+
+    def _style_warmup_button(self) -> None:
+        """The warm-up button is the warm/cold indicator: accent-coloured like the
+        other action buttons while the model is cold, ghosted once it is warm.
+
+        Ghosted under the Demo engine too - regex detection has no model to warm.
+        """
+        ghosted = self.model_warm or self.settings.engine != "model"
+        options = theme.ghost_button() if ghosted else self._active_button_face()
+        self.warmup_button.configure(**options)
 
     def _on_output_mode_choice(self, value: str) -> None:
         self.settings.output_mode = value
@@ -717,6 +785,7 @@ class PrivacyFilterApp(ctk.CTk):
 
     def _after_settings_change(self) -> None:
         self.engine.request_backend_rebuild()
+        self._forget_model()
         self.device_switch.set(self.settings.device)
         self.output_switch.set(self.settings.output_mode)
         self.engine_switch.set(self.settings.engine)
@@ -748,13 +817,16 @@ class PrivacyFilterApp(ctk.CTk):
             self.set_status("Queued...")
         self.engine.redact(text, source=self.current_source)
 
-    def load_model(self) -> None:
-        if self.settings.engine != "model":
-            self._set_engine("model", notify=True)
+    def load_model(self) -> bool:
+        """Queue a model load. Returns True when a job actually started.
+
+        The environment is probed before the engine is switched, so a refused or
+        cancelled load leaves the previous engine (usually Demo) in place.
+        """
         status = model_status(self.settings.checkpoint)
         if not status.installed:
             messagebox.showwarning(APP_TITLE, INSTALL_HINT, parent=self)
-            return
+            return False
         if not status.checkpoint_present:
             proceed = messagebox.askyesno(
                 APP_TITLE,
@@ -765,20 +837,25 @@ class PrivacyFilterApp(ctk.CTk):
             )
             if not proceed:
                 self.set_status("Model load cancelled")
-                return
+                return False
+        if self.settings.engine != "model":
+            self._set_engine("model", notify=True)
         self._set_busy(True)
         self.engine.load()
+        return True
 
     def warmup_model(self) -> None:
         if self.settings.engine != "model":
-            self.set_status("Warm-up only applies to the model engine")
+            self.set_status("Warm-up needs the model engine - set Engine to 'model' first")
             return
         self._set_busy(True)
         self.engine.warmup()
 
-    def unload_model(self) -> None:
+    def unload_model(self) -> bool:
+        """Queue an unload (freeing the weights). Returns True when a job started."""
         self._set_busy(True)
         self.engine.unload()
+        return True
 
     def cancel_job(self) -> None:
         if self.engine.busy:

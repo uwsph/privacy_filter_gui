@@ -59,6 +59,9 @@ class EngineController:
         self._rebuild = threading.Event()
         self._busy = 0
         self._stop = False
+        #: A model pass has run since the backend was (re)built - the UI uses this
+        #: to tell a cold model from a warm one (warm-up button colour).
+        self._warm = False
 
     # ------------------------------------------------------------------ #
     # plumbing
@@ -174,6 +177,7 @@ class EngineController:
             except Exception:  # noqa: BLE001 - best effort
                 pass
             self.backend = create_backend(self.settings, log=self._log)
+            self._warm = False  # fresh backend: nothing has been inferred yet
             self._emit(MSG_STATE, {"backend": self.backend.name})
 
     def _execute(self, job: "tuple[str, Any]") -> None:
@@ -185,14 +189,17 @@ class EngineController:
                 self._do_load()
             elif kind == JOB_WARMUP:
                 self.backend.warmup()
+                self._warm = True
             elif kind == JOB_REDACT:
                 self._do_redact(str(payload["text"]), payload.get("source"))
+                self._warm = self._weights_loaded()  # a finished model pass means warm
             elif kind == JOB_BATCH:
                 self._do_batch(list(payload))
+                self._warm = self._weights_loaded()
             elif kind == JOB_UNLOAD:
                 self.backend.close()
+                self._warm = False
                 self._emit(MSG_STATUS, "Model unloaded")
-                self._emit(MSG_STATE, {"loaded": False})
             else:
                 raise BackendError(f"Unknown job type: {kind}")
         except BackendError as exc:
@@ -200,8 +207,24 @@ class EngineController:
         except Exception as exc:  # noqa: BLE001 - never let the worker die silently
             self._emit(MSG_ERROR, f"{type(exc).__name__}: {exc}")
             self._log(traceback.format_exc(limit=4))
+        finally:
+            # Tell the UI how much is really resident now: warm-up and the first
+            # redaction load weights implicitly, a failed load loads nothing.
+            self._emit(MSG_STATE, {
+                "loaded": self._weights_loaded(),
+                "warm": self._warm,
+                "backend": self.backend.name,
+            })
+
+    def _weights_loaded(self) -> bool:
+        """Ask the live backend whether it holds weights (demo backends say no)."""
+        try:
+            return bool(getattr(self.backend, "loaded", False))
+        except Exception:  # noqa: BLE001 - reporting must never break a job
+            return False
 
     def _do_load(self) -> None:
+        """Load the weights (or warm up backends without an explicit load hook)."""
         load = getattr(self.backend, "load", None)
         if callable(load):
             load()

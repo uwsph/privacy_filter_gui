@@ -101,6 +101,18 @@ def ghost_button(**overrides: object) -> dict[str, object]:
     return colors
 
 
+#: The face of a normal, active CTkButton - customtkinter's default "blue" theme
+#: (tuples are customtkinter's ``(light, dark)`` order). Used as a fallback when
+#: the live theme cannot be read, so a button can always be un-ghosted.
+ACTIVE_BUTTON: dict[str, object] = {
+    "fg_color": ("#3B8ED0", "#1F6AA5"),
+    "hover_color": ("#36719F", "#144870"),
+    "text_color": ("#DCE4EE", "#DCE4EE"),
+    "border_color": "transparent",
+    "border_width": 0,
+}
+
+
 def resolve_mode(appearance: str, actual: str = "dark") -> str:
     """Map a user appearance preference to a concrete ``dark``/``light`` mode.
 
