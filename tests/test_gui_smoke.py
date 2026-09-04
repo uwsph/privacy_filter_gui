@@ -19,7 +19,7 @@ from stub_gui import DIALOG_ANSWERS, MESSAGEBOX_CALLS, SimpleNamespace  # noqa: 
 stub_gui.install()
 
 from opf_gui import dnd, theme  # noqa: E402
-from opf_gui.app import ACCEPTED_BATCH, PrivacyFilterApp  # noqa: E402
+from opf_gui.app import ACCEPTED_BATCH, VIEWS, PrivacyFilterApp  # noqa: E402
 from opf_gui.models import Settings  # noqa: E402
 from opf_gui.widgets import span_tag  # noqa: E402
 
@@ -56,9 +56,9 @@ class TestInputHeaderLayout(unittest.TestCase):
 
     def test_buttons_sit_above_the_editor_in_workflow_order(self) -> None:
         header = self.app.redact_button.master
-        self.assertEqual(header.grid_info_now["row"], 1)
-        self.assertEqual(self.app.input_pane.grid_info_now["row"], 2)
-        self.assertEqual(self.app.count_label.master.grid_info_now["row"], 3)
+        self.assertEqual(header.grid_info_now["row"], 0)
+        self.assertEqual(self.app.input_pane.grid_info_now["row"], 1)
+        self.assertEqual(self.app.count_label.master.grid_info_now["row"], 2)
 
         buttons = [getattr(self.app, name) for name in HEADER_BUTTONS]
         for button in buttons:
@@ -78,11 +78,12 @@ class TestInputHeaderLayout(unittest.TestCase):
     def test_input_editor_matches_output_editor_geometry(self) -> None:
         left = self.app.left_column
         output_tab = self.app.tabs.tab("Output")
-        # spacer absorbing the tab strip (10+8+18 header rows + 6 inner padding),
-        # then the button header, the growing pane row and the footer
-        self.assertEqual(left.grid_rowconfigure(0, "minsize"), "42")
-        self.assertEqual(left.grid_rowconfigure(1, "minsize"), "34")
-        self.assertEqual(self.app.input_pane.grid_info_now["row"], 2)
+        # Both columns start at the same pixel row - the view switch lives in the
+        # banner, so there is no strip-height spacer above the input buttons -
+        # and they repeat the same three rows: header, growing pane, footer.
+        self.assertEqual(left.grid_rowconfigure(0, "minsize"), "34")
+        self.assertEqual(left.grid_rowconfigure(2, "minsize"), "32")
+        self.assertEqual(self.app.input_pane.grid_info_now["row"], 1)
         self.assertEqual(self.app.output_pane.grid_info_now["row"], 1)
         self.assertEqual(
             self.app.input_pane.grid_info_now["pady"], self.app.output_pane.grid_info_now["pady"]
@@ -90,14 +91,67 @@ class TestInputHeaderLayout(unittest.TestCase):
         self.assertEqual(
             self.app.input_pane.grid_info_now["padx"], self.app.output_pane.grid_info_now["padx"]
         )
-        # header rows on both sides must be identical so the panes line up
-        self.assertEqual(left.grid_rowconfigure(1, "minsize"), output_tab.grid_rowconfigure(0, "minsize"))
+        # header and footer rows on both sides must be identical so the two
+        # editors end up the same height, edge for edge
+        self.assertEqual(left.grid_rowconfigure(0, "minsize"), output_tab.grid_rowconfigure(0, "minsize"))
+        self.assertEqual(left.grid_rowconfigure(2, "minsize"), output_tab.grid_rowconfigure(2, "minsize"))
 
-    def test_tab_strip_height_follows_widget_scaling(self) -> None:
-        self.app.tabs.grid_rowconfigure(0, minsize=12.5)
-        self.app.tabs.grid_rowconfigure(1, minsize=10.0)
-        self.app.tabs.grid_rowconfigure(2, minsize=22.5)
-        self.assertEqual(self.app._tab_strip_height(), 51)  # noqa: SLF001
+    def test_both_editor_panes_share_one_panel_grey(self) -> None:
+        # The results deck nests a page frame per view, and customtkinter paints a
+        # nested frame one grey darker than a bare one. The input panel asks for that
+        # inner grey explicitly, otherwise the two panes sit on different greys.
+        self.assertEqual(self.app.left_column.cget("fg_color"), theme.nested_panel_bg())
+
+    def test_panel_grey_is_a_light_dark_pair(self) -> None:
+        # customtkinter tuples are (light-mode, dark-mode); under the stubs there is
+        # no live theme to read, so this checks the hex fallback is ordered right.
+        light, dark = theme.nested_panel_bg()
+        self.assertTrue(theme_is_darker(dark, light), (light, dark))
+
+    def test_editor_columns_stay_centred_in_every_view(self) -> None:
+        body = self.app.left_column.master
+        for column in (0, 1):
+            self.assertEqual(body.grid_columnconfigure(column, "weight"), "1")
+            self.assertEqual(body.grid_columnconfigure(column, "uniform"), "panes")
+        # One uniform group means no view - not even the wide Batch toolbar -
+        # can move the divider between the two text panes.
+        for view in VIEWS:
+            self.app.show_view(view)
+            self.assertEqual(self.app.tabs.get(), view)
+            self.assertEqual(self.app.tabs.tab(view).grid_info_now["row"], 0)
+
+    def test_view_switch_lives_in_the_banner_and_drives_the_deck(self) -> None:
+        # Right-aligned in the banner, above the Detection summary panel.
+        self.assertEqual(self.app.view_switch.values, list(VIEWS))
+        self.assertEqual(self.app.view_switch.grid_info_now["sticky"], "e")
+        toolbar = self.app.engine_switch.master
+        captions = [
+            child.cget("text")
+            for child in toolbar.winfo_children()
+            if child.grid_info_now.get("row") == 0
+        ]
+        self.assertEqual(captions[-1], "Results view")
+        # The deck has no strip of its own: its page row is the whole frame.
+        self.assertEqual(self.app.tabs.grid_rowconfigure(0, "weight"), "1")
+        self.assertNotIn("Results view", widget_texts(self.app.tabs))
+
+        # a click on the switch swaps pages and only one page stays mapped
+        self.app.view_switch.choose("JSON")
+        self.assertEqual(self.app.tabs.get(), "JSON")
+        self.assertEqual(self.app.tabs.tab("JSON").grid_info_now["sticky"], "nsew")
+        self.assertEqual(self.app.tabs.tab("Output").calls[-1][0], "grid_forget")
+        # and a programmatic jump (span click, menu, multi-file drop) keeps the
+        # switch in step
+        self.app.show_view("Log")
+        self.assertEqual(self.app.view_switch.get(), "Log")
+
+    def test_unknown_view_is_an_error(self) -> None:
+        from opf_gui.widgets import TabDeck
+
+        with self.assertRaises(KeyError):
+            self.app.tabs.tab("Nope")
+        with self.assertRaises(KeyError):
+            TabDeck(self.app.left_column, ("A",)).set("B")
 
 
 class TestToolbarAndButtonStyling(unittest.TestCase):
@@ -107,6 +161,7 @@ class TestToolbarAndButtonStyling(unittest.TestCase):
         app = make_app(decode_mode="argmax")
         for name, values in (
             ("engine_switch", ["model", "demo"]),
+            ("model_switch", ["load", "unload"]),
             ("output_switch", ["typed", "redacted"]),
             ("device_switch", ["auto", "cpu", "cuda"]),
             ("theme_switch", ["dark", "light"]),
@@ -142,8 +197,9 @@ class TestToolbarAndButtonStyling(unittest.TestCase):
 
     def test_transparent_buttons_are_legible_in_light_mode(self) -> None:
         app = make_app()
+        app.model_warm = True  # a warm model is what ghosts the warm-up button
+        app._style_warmup_button()  # noqa: SLF001
         buttons = {
-            "Unload model": app.unload_button,
             "Warm up model": app.warmup_button,
             "Clear": app.clear_button,
         }
@@ -585,7 +641,7 @@ class TestToolbarCleanup(unittest.TestCase):
 
     def test_redundant_controls_are_absent(self) -> None:
         attrs = vars(self.app)
-        for removed in ("engine_badge", "cancel_button", "decode_switch"):
+        for removed in ("engine_badge", "cancel_button", "decode_switch", "load_button", "unload_button"):
             self.assertNotIn(removed, attrs)
 
     def test_demo_panel_names_the_engine(self) -> None:
@@ -600,6 +656,243 @@ class TestToolbarCleanup(unittest.TestCase):
         self._use_backend(BrokenBackend())
         self.app._refresh_engine_info()  # noqa: SLF001
         self.assertIn("unavailable", self.app.engine_info_label.cget("text"))
+
+
+class StubLoadableBackend:
+    """Model backend double that remembers whether it currently holds weights."""
+
+    name = "opf"
+
+    def __init__(self) -> None:
+        self.loaded = False
+
+    def describe(self) -> dict[str, str]:
+        return {"Engine": "stub", "Loaded": "yes" if self.loaded else "no"}
+
+    def load(self) -> None:
+        self.loaded = True
+
+    def warmup(self) -> None:
+        self.loaded = True
+
+    def close(self) -> None:
+        self.loaded = False
+
+
+class EnginePatchMixin:
+    """Swap in a stub backend and fake the `opf` environment probe."""
+
+    def use_backend(self, backend: Any) -> None:
+        original = self.app.engine.backend  # type: ignore[attr-defined]
+        self.app.engine.backend = backend  # type: ignore[attr-defined]
+        self.addCleanup(setattr, self.app.engine, "backend", original)  # type: ignore[attr-defined]
+
+    def fake_status(self, *, installed: bool = True, present: bool = True) -> None:
+        """Pretend `opf` (and optionally the checkpoint) is available."""
+        from opf_gui import app as app_module
+        from opf_gui.backends import ModelStatus
+
+        self.addCleanup(setattr, app_module, "model_status", app_module.model_status)
+        app_module.model_status = lambda _checkpoint: ModelStatus(
+            installed=installed, checkpoint_present=present, detail="stubbed probe"
+        )
+
+
+class TestModelToggle(EnginePatchMixin, unittest.TestCase):
+    """The toolbar 'Model' toggle owns load/unload; the old buttons are gone."""
+
+    def setUp(self) -> None:
+        self.app = make_app()
+
+    def toolbar_row(self) -> dict[int, str]:
+        """Caption of every toolbar switch, keyed by its grid column."""
+        row: dict[int, str] = {}
+        for child in self.app.engine_switch.master.winfo_children():
+            info = child.grid_info_now
+            if str(info.get("row")) == "0":
+                row[int(info["column"])] = str(child.cget("text"))
+        return row
+
+    def menu_labels(self, name: str) -> list[str]:
+        cascade = next(
+            options for _kind, options in self.app.menu_bar.entries if options.get("label") == name
+        )
+        return [str(options.get("label")) for _kind, options in cascade["menu"].entries]
+
+    def test_toggle_sits_between_engine_and_labels(self) -> None:
+        self.assertEqual(self.app.model_switch.values, ["load", "unload"])
+        row = self.toolbar_row()
+        self.assertEqual([row[column] for column in sorted(row)],
+                         ["Engine", "Model", "Labels", "Device", "Theme", "Results view"])
+        columns = [
+            int(widget.grid_info_now["column"])
+            for widget in (self.app.engine_switch, self.app.model_switch, self.app.output_switch)
+        ]
+        self.assertEqual(columns, [1, 2, 3])
+
+    def test_replaced_buttons_are_gone_but_the_paths_remain(self) -> None:
+        self.assertEqual(self.app.model_switch.get(), "unload")  # nothing loaded at startup
+        toolbar = self.app.engine_switch.master.master  # switch -> inner -> toolbar
+        texts = [text for text in widget_texts(toolbar) if text]
+        for gone in ("Settings", "Load model", "Unload model (free RAM)"):
+            self.assertNotIn(gone, texts)
+        # settings stay reachable from the menu, warm-up from the sidebar
+        self.assertIn("Advanced settings...", self.menu_labels("View"))
+        self.assertIn("Load model", self.menu_labels("Run"))
+        self.assertIn("Unload model (free memory)", self.menu_labels("Run"))
+        self.assertEqual(self.app.warmup_button.text, "Warm up model")
+
+    def test_toggle_loads_then_unloads(self) -> None:
+        app = self.app
+        backend = StubLoadableBackend()
+        self.use_backend(backend)
+        app.settings.engine = "model"
+        self.fake_status()
+
+        app.model_switch.choose("load")
+        self.assertTrue(backend.loaded)
+        self.assertTrue(app.model_loaded)
+        self.assertEqual(app.model_switch.get(), "load")
+        self.assertIn("Loaded: yes", app.engine_info_label.cget("text"))
+
+        app.model_switch.choose("unload")
+        self.assertFalse(backend.loaded)
+        self.assertFalse(app.model_loaded)
+        self.assertEqual(app.model_switch.get(), "unload")
+
+    def test_refused_load_snaps_back_and_leaves_the_engine_alone(self) -> None:
+        app = self.app
+        stub_gui.reset()
+        # `opf` is not installed here, so the toggle must not pretend otherwise
+        app.model_switch.choose("load")
+        self.assertEqual(app.model_switch.get(), "unload")
+        self.assertFalse(app.model_loaded)
+        self.assertEqual(app.settings.engine, "demo")
+        self.assertTrue(MESSAGEBOX_CALLS and MESSAGEBOX_CALLS[-1][0] == "showwarning")
+
+    def test_declined_download_leaves_the_engine_alone(self) -> None:
+        app = self.app
+        self.fake_status(present=False)
+        stub_gui.DIALOG_ANSWERS["askyesno"] = False
+        app.model_switch.choose("load")
+        self.assertEqual(app.model_switch.get(), "unload")
+        self.assertEqual(app.settings.engine, "demo")
+        self.assertIn("cancelled", app.status_label.cget("text"))
+
+    def test_unload_without_a_loaded_model_does_nothing(self) -> None:
+        self.app.model_switch.choose("unload")
+        self.assertFalse(self.app.model_loaded)
+        self.assertEqual(self.app.model_switch.get(), "unload")
+
+    def test_clicks_while_a_model_job_runs_defer_to_the_worker(self) -> None:
+        app = self.app
+        app._model_pending = True  # noqa: SLF001 - pretend a load job is in flight
+        app.model_switch.choose("unload")
+        self.assertEqual(app.model_switch.get(), "load")  # still shows the job's target
+        self.assertIn("Model job already running", app.status_label.cget("text"))
+        self.assertFalse(app.model_loaded)  # nothing has actually landed yet
+        app._model_pending = None  # noqa: SLF001 - job finished without loading
+        app._sync_model_switch()  # noqa: SLF001
+        self.assertEqual(app.model_switch.get(), "unload")
+
+    def test_warm_up_counts_as_loaded(self) -> None:
+        app = self.app
+        backend = StubLoadableBackend()
+        self.use_backend(backend)
+        app.settings.engine = "model"
+        app.warmup_model()
+        self.assertTrue(backend.loaded)
+        self.assertEqual(app.model_switch.get(), "load")
+
+    def test_backend_rebuild_forgets_the_loaded_model(self) -> None:
+        app = self.app
+        backend = StubLoadableBackend()
+        self.use_backend(backend)
+        app.settings.engine = "model"
+        self.fake_status()
+        app.model_switch.choose("load")
+        self.assertEqual(app.model_switch.get(), "load")
+        app._set_engine("demo")  # noqa: SLF001 - a rebuild throws the weights away
+        self.assertEqual(app.model_switch.get(), "unload")
+        self.assertFalse(app.model_loaded)
+
+
+class TestWarmUpButton(EnginePatchMixin, unittest.TestCase):
+    """`Warm up model` doubles as the cold/warm indicator: solid while cold,
+    ghosted (like the secondary controls) once the model has been warmed."""
+
+    def setUp(self) -> None:
+        self.app = make_app()
+
+    def ghosted(self) -> bool:
+        return self.app.warmup_button.options.get("fg_color") == "transparent"
+
+    def test_a_cold_model_gets_the_active_button_face(self) -> None:
+        app = self.app
+        app._set_engine("model")  # noqa: SLF001 - the regex engine has no model to warm
+        self.assertFalse(app.model_warm)
+        face = app.warmup_button.options
+        self.assertNotEqual(face.get("fg_color"), "transparent")
+        self.assertEqual(face.get("fg_color"), theme.ACTIVE_BUTTON["fg_color"])
+        self.assertEqual(face.get("border_width"), 0)
+
+    def test_the_demo_engine_has_nothing_to_warm(self) -> None:
+        app = self.app  # Demo engine: `opf` is not installed in this environment
+        self.assertEqual(app.settings.engine, "demo")
+        self.assertFalse(app.model_warm)
+        self.assertTrue(self.ghosted())
+
+    def test_warming_up_ghosts_the_button(self) -> None:
+        app = self.app
+        backend = StubLoadableBackend()
+        self.use_backend(backend)
+        app.settings.engine = "model"
+        self.assertFalse(app.model_warm)
+        app.warmup_model()
+        self.assertTrue(app.model_warm)
+        self.assertTrue(self.ghosted())
+
+    def test_loading_without_a_pass_is_not_warm(self) -> None:
+        app = self.app
+        self.use_backend(StubLoadableBackend())
+        app.settings.engine = "model"
+        self.fake_status()
+        app.model_switch.choose("load")
+        self.assertTrue(app.model_loaded)
+        self.assertFalse(app.model_warm)
+        self.assertFalse(self.ghosted())
+
+    def test_unload_makes_the_model_cold_again(self) -> None:
+        app = self.app
+        self.use_backend(StubLoadableBackend())
+        app.settings.engine = "model"
+        app.warmup_model()
+        self.assertTrue(self.ghosted())
+        app.model_switch.choose("unload")
+        self.assertFalse(app.model_warm)
+        self.assertFalse(self.ghosted())
+
+    def test_a_finished_redaction_counts_as_warm(self) -> None:
+        from opf_gui.engine import MSG_STATE
+
+        app = self.app
+        app._set_engine("model")  # noqa: SLF001
+        app._on_engine_message(MSG_STATE, {"loaded": True, "warm": True})  # noqa: SLF001
+        self.assertTrue(self.ghosted())
+        app._on_engine_message(MSG_STATE, {"loaded": True, "warm": False})  # noqa: SLF001
+        self.assertFalse(self.ghosted())
+
+    def test_switching_engine_resets_the_warm_face(self) -> None:
+        app = self.app
+        self.use_backend(StubLoadableBackend())
+        app.settings.engine = "model"
+        app.warmup_model()
+        self.assertTrue(self.ghosted())
+        app._set_engine("demo")  # noqa: SLF001 - cold, and nothing to warm under Demo
+        self.assertFalse(app.model_warm)
+        self.assertTrue(self.ghosted())
+        app._set_engine("model")  # noqa: SLF001 - a cold model again, so active
+        self.assertFalse(self.ghosted())
 
 
 class TestSettingsDialog(unittest.TestCase):
