@@ -669,12 +669,22 @@ class CTkButton(Widget):
 class _ChoiceWidget(Widget):
     """Segmented buttons and option menus, both used as single-choice pickers."""
 
+    #: customtkinter's CTkOptionMenu opens on its first value; a segmented button
+    #: starts with NOTHING selected (`_current_value = ""`) until set() or a
+    #: variable picks one - which is why an app must set() its view switch.
+    DEFAULT_TO_FIRST = True
+
     def __init__(self, master: Any = None, *, values: list[str] | None = None, **kwargs: Any) -> None:
         super().__init__(master, values=list(values or []), **kwargs)
         self.values = list(values or [])
-        self._value = self.values[0] if self.values else ""
         self._command: Callable[..., Any] | None = kwargs.get("command")
         self._variable = kwargs.get("variable")
+        if self._variable is not None:
+            self._value = self._variable.get()
+        elif self.values and self.DEFAULT_TO_FIRST:
+            self._value = self.values[0]
+        else:
+            self._value = ""
 
     def set(self, value: Any) -> None:
         # customtkinter's set() deliberately does NOT fire command.
@@ -693,7 +703,7 @@ class _ChoiceWidget(Widget):
 
 
 class CTkSegmentedButton(_ChoiceWidget):
-    pass
+    DEFAULT_TO_FIRST = False
 
 
 class CTkOptionMenu(_ChoiceWidget):

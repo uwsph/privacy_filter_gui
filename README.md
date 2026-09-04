@@ -77,6 +77,7 @@ still starts and the Log tab says drag & drop is off.
 
 1. **Get text in** — the input buttons run in workflow order:
    `Sample` · `Paste` · `Open` · `Redact` · `Clear`.
+   `Clear` is accent-coloured while the input pane holds text and ghosted once it is empty.
    `Open` accepts multiple files; folders can also be **dropped onto the editor**
    (needs `tkinterdnd2` - listed by `--check`; the app logs a note and carries on without it).
 2. **Redact** — `Redact` (or `Ctrl+Return`). The model runs in a worker thread,
@@ -89,9 +90,11 @@ still starts and the Log tab says drag & drop is off.
 
 Results views: **Output** · **Review** · **JSON** · **Batch** · **Log**, switched by the
 segmented control on the right of the toolbar (above the Detection summary), so the two
-editor panes keep the same size in every view. The Log view is the running
+editor panes keep the same size in every view. That control always shows the live view
+highlighted, starting with `Output` when the window opens. The Log view is the running
 activity feed (engine loads, redaction timings, file and export actions); warnings and
-errors are colour-coded, `Copy log` puts the whole feed on the clipboard for support tickets,
+errors are colour-coded, `Copy log` puts the whole feed on the clipboard for support tickets
+(active while the feed has a line to copy, ghosted when it is empty),
 and it trims itself to the last ~1000 lines.
 Toolbar: engine (`model`/`demo`), model (`load`/`unload`), labels (`typed`/`redacted`),
 device (`auto`/`cpu`/`cuda`), theme (`dark`/`light`), results view (`Output`/`Review`/`JSON`/
@@ -104,6 +107,9 @@ and `Run` still offers Load / Warm up / Unload.
 `Warm up model` is its own status light: accent-coloured like the other action buttons
 while the model is cold, ghosted once a pass has run. Unloading or switching engine makes
 the model cold again, and it is ghosted on the Demo engine, where there is no model to warm.
+The engine and span-count text above it is wrapped to the panel width, so a long value with
+no spaces in it - a checkpoint path like `C:\Users\you\.opf\privacy_filter` - is broken
+across lines instead of being cut off at the edge.
 
 ### Shortcuts
 

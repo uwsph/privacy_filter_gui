@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from opf_gui import formatting, theme
+from opf_gui import __version__, formatting, theme
 from opf_gui.backends import DemoBackend, ModelStatus, model_status, resolve_device
 from opf_gui.engine import (
     MSG_BATCH_ITEM,
@@ -265,6 +265,40 @@ class TestFormatting(unittest.TestCase):
         self.assertEqual(formatting.safe_stem("/tmp/My Report (2024).txt"), "My_Report_2024")
         self.assertEqual(formatting.safe_stem("###"), "document")
         self.assertEqual(formatting.safe_stem("a" * 200)[:80], "a" * 80)
+
+    def test_wrap_long_tokens_breaks_a_path_at_a_separator(self) -> None:
+        wrapped = formatting.wrap_long_tokens("Checkpoint: /home/ana/.opf/privacy_filter")
+        self.assertEqual(wrapped, "Checkpoint: /home/ana/.opf/privacy_\nfilter")
+        # nothing is lost, only re-lined
+        self.assertEqual(wrapped.replace("\n", ""), "Checkpoint: /home/ana/.opf/privacy_filter")
+
+    def test_wrap_long_tokens_leaves_wrappable_text_alone(self) -> None:
+        for text in (
+            "Demo engine: heuristic regex detection only - not a privacy control.",
+            "12 span(s) in 2.05 s\n5 x Private Person",
+            "",
+            "already\nbroken",
+        ):
+            self.assertEqual(formatting.wrap_long_tokens(text), text)
+
+    def test_wrap_long_tokens_splits_runs_with_no_separator(self) -> None:
+        wrapped = formatting.wrap_long_tokens("sk" + "a" * 40, max_run=10)
+        self.assertEqual(
+            wrapped, "sk" + "a" * 8 + "\n" + "\n".join(["a" * 10] * 3) + "\n" + "aa"
+        )
+        for piece in wrapped.split("\n"):
+            self.assertLessEqual(len(piece), 10)
+        self.assertEqual(formatting.break_long_token("short"), ["short"])
+        self.assertEqual(formatting.break_long_token(""), [""])
+        self.assertEqual(formatting.break_long_token("ab", max_run=0), ["a", "b"])
+
+    def test_wrap_long_tokens_keeps_every_line_inside_the_panel(self) -> None:
+        text = formatting.wrap_long_tokens(
+            "Checkpoint: C:\\Users\\priya\\.opf\\privacy_filter\\viterbi_calibration.json"
+        )
+        for token in text.replace("\n", " ").split(" "):
+            self.assertLessEqual(len(token), formatting.LABEL_MAX_RUN, text)
+        self.assertIn("viterbi_calibration.json", text.replace("\n", ""))
 
     def test_table_rows_truncate_long_matches(self) -> None:
         rows = formatting.table_rows([Span("secret", 0, 80, "x" * 80)])
@@ -589,6 +623,23 @@ class TestThemeContrast(unittest.TestCase):
     def test_span_accent_falls_back_for_unknown_labels(self) -> None:
         self.assertEqual(theme.span_accent("mystery", "light"), theme.FALLBACK_ACCENT[1])
         self.assertEqual(theme.span_accent("mystery", "dark"), theme.FALLBACK_ACCENT[0])
+
+
+class TestReleaseMetadata(unittest.TestCase):
+    """The version is declared twice - package attribute and project metadata -
+    and the About box plus the startup log both print it, so a release must not
+    let the two declarations drift apart."""
+
+    def test_package_version_matches_pyproject(self) -> None:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        declared = re.search(r"^version\s*=\s*\"([^\"]+)\"", pyproject.read_text(encoding="utf-8"), re.MULTILINE)
+        self.assertIsNotNone(declared, "no [project] version in pyproject.toml")
+        self.assertEqual(declared.group(1), __version__)
+
+    def test_version_is_a_release_number(self) -> None:
+        # Shown as `Open Privacy Filter GUI v<version>` in the About box and the
+        # first line of a fresh activity log.
+        self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
 
 
 if __name__ == "__main__":

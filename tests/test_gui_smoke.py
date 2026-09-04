@@ -18,9 +18,9 @@ from stub_gui import DIALOG_ANSWERS, MESSAGEBOX_CALLS, SimpleNamespace  # noqa: 
 
 stub_gui.install()
 
-from opf_gui import dnd, theme  # noqa: E402
-from opf_gui.app import ACCEPTED_BATCH, VIEWS, PrivacyFilterApp  # noqa: E402
-from opf_gui.models import Settings  # noqa: E402
+from opf_gui import __version__, dnd, formatting, theme  # noqa: E402
+from opf_gui.app import ACCEPTED_BATCH, APP_TITLE, VIEWS, PrivacyFilterApp  # noqa: E402
+from opf_gui.models import Outcome, Settings, Span  # noqa: E402
 from opf_gui.widgets import span_tag  # noqa: E402
 
 SAMPLE = (
@@ -29,12 +29,12 @@ SAMPLE = (
 )
 
 
-def make_app(**overrides) -> PrivacyFilterApp:  # noqa: ANN003
+def make_app(start_text: str | None = SAMPLE, **overrides) -> PrivacyFilterApp:  # noqa: ANN003
     stub_gui.reset()
     settings = Settings(engine="demo", appearance="dark")
     for key, value in overrides.items():
         setattr(settings, key, value)
-    return PrivacyFilterApp(settings=settings, inline_engine=True, start_text=SAMPLE, save_config=False)
+    return PrivacyFilterApp(settings=settings, inline_engine=True, start_text=start_text, save_config=False)
 
 
 HEADER_BUTTONS = (
@@ -145,6 +145,16 @@ class TestInputHeaderLayout(unittest.TestCase):
         self.app.show_view("Log")
         self.assertEqual(self.app.view_switch.get(), "Log")
 
+    def test_the_banner_switch_opens_highlighted_on_the_view_that_is_showing(self) -> None:
+        # A CTkSegmentedButton selects nothing on its own, so an app that opens on
+        # a page has to point the switch at it - otherwise "Output" reads as
+        # unselected while the Output page is on screen.
+        self.assertEqual(self.app.tabs.get(), "Output")
+        self.assertEqual(self.app.view_switch.get(), self.app.tabs.get())
+        for view in VIEWS:
+            self.app.show_view(view)
+            self.assertEqual(self.app.view_switch.get(), view)
+
     def test_unknown_view_is_an_error(self) -> None:
         from opf_gui.widgets import TabDeck
 
@@ -198,7 +208,9 @@ class TestToolbarAndButtonStyling(unittest.TestCase):
     def test_transparent_buttons_are_legible_in_light_mode(self) -> None:
         app = make_app()
         app.model_warm = True  # a warm model is what ghosts the warm-up button
+        app.input_pane.set("")  # an empty editor is what ghosts Clear
         app._style_warmup_button()  # noqa: SLF001
+        app._style_clear_button()  # noqa: SLF001
         buttons = {
             "Warm up model": app.warmup_button,
             "Clear": app.clear_button,
@@ -231,9 +243,110 @@ def _luminance(color: str) -> float:
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
+class TestButtonAvailability(unittest.TestCase):
+    """`Clear` and `Copy log` track what they can act on: accent face while there
+    is text to clear / copy, ghosted while there is not."""
+
+    def setUp(self) -> None:
+        self.app = make_app()
+
+    def face(self, button: Any) -> str:
+        return "ghost" if button.options.get("fg_color") == "transparent" else "active"
+
+    def type_into_editor(self, text: str) -> None:
+        """A real edit fires the pane's change callback; set() deliberately does not."""
+        self.app.input_pane.text.insert("insert", text)
+        self.app._on_input_change()  # noqa: SLF001
+
+    def test_clear_is_active_while_the_editor_holds_text(self) -> None:
+        self.assertEqual(self.face(self.app.clear_button), "active")
+
+    def test_clear_starts_ghosted_on_an_empty_editor(self) -> None:
+        app = make_app(start_text="")
+        self.assertEqual(self.face(app.clear_button), "ghost")
+        app.input_pane.text.insert("1.0", "a name and an email")
+        app._on_input_change()  # noqa: SLF001
+        self.assertEqual(self.face(app.clear_button), "active")
+
+    def test_clear_ghosts_when_the_editor_is_emptied(self) -> None:
+        self.app.clear_all()
+        self.assertEqual(self.face(self.app.clear_button), "ghost")
+        self.assertEqual(self.app.count_label.cget("text"), "0 chars")
+        self.app.load_sample()
+        self.assertEqual(self.face(self.app.clear_button), "active")
+        self.type_into_editor(" more text")
+        self.assertEqual(self.face(self.app.clear_button), "active")
+        self.app.input_pane.text.delete("1.0", "end")
+        self.app._on_input_change()  # noqa: SLF001
+        self.assertEqual(self.face(self.app.clear_button), "ghost")
+
+    def test_copy_log_is_ghosted_on_an_empty_log(self) -> None:
+        self.app._clear_log()  # noqa: SLF001 - the startup lines are log text too
+        self.assertEqual(self.app.console.text(), "")
+        self.assertEqual(self.face(self.app.copy_log_button), "ghost")
+
+    def test_copy_log_is_active_while_the_log_has_text(self) -> None:
+        self.app._clear_log()  # noqa: SLF001
+        self.assertEqual(self.face(self.app.copy_log_button), "ghost")
+        self.app.log("ticket 4111 redacted")
+        self.assertEqual(self.face(self.app.copy_log_button), "active")
+        self.app._copy_log()  # noqa: SLF001 - copying leaves the feed (and the face) alone
+        self.assertEqual(self.face(self.app.copy_log_button), "active")
+        self.app._clear_log()  # noqa: SLF001
+        self.assertEqual(self.face(self.app.copy_log_button), "ghost")
+
+    def test_redaction_makes_copy_log_usable(self) -> None:
+        self.app._clear_log()  # noqa: SLF001
+        self.app.run_redact()
+        self.assertEqual(self.face(self.app.copy_log_button), "active")
+
+    def test_the_faces_survive_a_theme_switch(self) -> None:
+        self.app._clear_log()  # noqa: SLF001
+        self.app.theme_switch.choose("light")
+        self.assertEqual(self.face(self.app.clear_button), "active")
+        self.assertEqual(self.face(self.app.copy_log_button), "ghost")
+        self.app.theme_switch.choose("dark")
+        self.assertEqual(self.face(self.app.clear_button), "active")
+
+    def test_an_appearance_refresh_repaints_both_faces(self) -> None:
+        # A repaint re-reads the palette, so the buttons must be re-faced and not
+        # left holding colours (or a ghost) from before the theme changed.
+        app = make_app(start_text="")
+        app.log("checkpoint downloaded")  # noqa: SLF001 - makes Copy log usable
+        app._clear_log()  # noqa: SLF001 - then it has nothing to copy again
+        before = (len(app.clear_button.calls), len(app.copy_log_button.calls))
+        app._apply_appearance()  # noqa: SLF001
+        self.assertGreater(len(app.clear_button.calls), before[0])
+        self.assertGreater(len(app.copy_log_button.calls), before[1])
+        self.assertEqual(self.face(app.clear_button), "ghost")
+        self.assertEqual(self.face(app.copy_log_button), "ghost")
+
+
 class TestRedactionFlow(unittest.TestCase):
     def setUp(self) -> None:
         self.app = make_app()
+
+    def test_the_summary_panel_wraps_over_long_labels(self) -> None:
+        # The span counts above "Warm up model" share that panel's narrow column,
+        # so nothing in them may be a single unbreakable run of characters.
+        self.app.show_outcome(
+            Outcome(
+                text="x",
+                spans=[Span("CustomerTaxIdentificationNumber", 0, 1, "x", "<PRIVATE_SECRET>")],
+                redacted_text="<PRIVATE_SECRET>",
+                engine="model",
+                latency_ms=2050.0,
+            )
+        )
+        text = self.app.summary_label.cget("text")
+        self.assertIn("1 span(s) in", text)
+        counts = [line for line in text.splitlines() if line.startswith("1 x")]
+        self.assertEqual(len(counts), 1)
+        # the 29-character label name did not fit, so it ran onto a second line
+        self.assertNotIn("Customertaxidentificationnumber", counts[0])
+        for token in text.replace("\n", " ").split(" "):
+            self.assertLessEqual(len(token), formatting.LABEL_MAX_RUN, text)
+        self.assertIn("Customertaxidentificationnumber", text.replace("\n", ""))
 
     def test_redact_updates_every_view(self) -> None:
         self.app.run_redact()
@@ -562,6 +675,12 @@ class TestActivityLog(unittest.TestCase):
     def setUp(self) -> None:
         self.app = make_app()
 
+    def test_a_fresh_log_opens_with_the_app_version(self) -> None:
+        # `Copy log` is how a feed reaches a support ticket, so the very first
+        # line has to name the build that produced it.
+        lines = self.app.console.text().splitlines()
+        self.assertIn(f"{APP_TITLE} v{__version__}", lines[0])
+
     def test_startup_activity_is_visible_and_box_stays_read_only(self) -> None:
         self.assertEqual(self.app.log_box.cget("state"), "disabled")
         self.assertIn("Ready.", self.app.console.text())
@@ -627,6 +746,22 @@ class BrokenBackend:
         raise RuntimeError("no checkpoint")
 
 
+class LongPathBackend:
+    """A model backend reporting a checkpoint path with no spaces in it."""
+
+    name = "opf"
+
+    CHECKPOINT = "/home/ana/.opf/privacy_filter"
+
+    def describe(self) -> dict[str, str]:
+        return {
+            "Engine": "OpenAI Privacy Filter",
+            "Checkpoint": self.CHECKPOINT,
+            "Device": "cuda",
+            "Context window": "model default",
+        }
+
+
 class TestToolbarCleanup(unittest.TestCase):
     """Redundant controls (toolbar badge, Cancel button) are gone; the
     'Detection summary' panel is the single engine-status surface."""
@@ -656,6 +791,28 @@ class TestToolbarCleanup(unittest.TestCase):
         self._use_backend(BrokenBackend())
         self.app._refresh_engine_info()  # noqa: SLF001
         self.assertIn("unavailable", self.app.engine_info_label.cget("text"))
+
+    def test_the_checkpoint_path_wraps_inside_the_panel(self) -> None:
+        # A label's wraplength only breaks lines at whitespace, so the model's
+        # space-free checkpoint path ran off the edge of the Detection summary
+        # panel while the Demo engine's wording wrapped neatly. Above the
+        # "Warm up model" button, both engines have to fit.
+        self._use_backend(LongPathBackend())
+        self.app._refresh_engine_info()  # noqa: SLF001
+        text = self.app.engine_info_label.cget("text")
+        self.assertIn("Checkpoint:", text)
+        path_lines = [line for line in text.splitlines() if LongPathBackend.CHECKPOINT in line]
+        self.assertEqual(path_lines, [])  # the path did not fit on any single line
+        for token in text.replace("\n", " ").split(" "):
+            self.assertLessEqual(len(token), formatting.LABEL_MAX_RUN, text)
+        # wrapped, never truncated
+        self.assertIn(LongPathBackend.CHECKPOINT, text.replace("\n", ""))
+
+    def test_the_demo_panel_still_wraps_its_warning(self) -> None:
+        text = self.app.engine_info_label.cget("text")
+        self.assertIn("Warning:", text)
+        for token in text.replace("\n", " ").split(" "):
+            self.assertLessEqual(len(token), formatting.LABEL_MAX_RUN, text)
 
 
 class StubLoadableBackend:
@@ -928,6 +1085,13 @@ class TestAppLifecycle(unittest.TestCase):
         app = make_app()
         app._on_close()  # noqa: SLF001
         self.assertTrue(app._quitting)  # noqa: SLF001
+
+    def test_about_names_the_version(self) -> None:
+        app = make_app()
+        app.show_about()  # noqa: SLF001 - Help -> About OPF GUI, and F1
+        title, body = MESSAGEBOX_CALLS[-1][1][:2]
+        self.assertEqual(title, APP_TITLE)
+        self.assertTrue(body.startswith(f"{APP_TITLE} v{__version__}"), body)
 
     def test_menu_has_expected_commands(self) -> None:
         app = make_app()

@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import dnd, formatting, theme
+from . import __version__, dnd, formatting, theme
 from .backends import INSTALL_HINT, model_status
 from .engine import (
     MSG_BATCH_ITEM,
@@ -95,6 +95,9 @@ class PrivacyFilterApp(ctk.CTk):
         self.engine.start()
 
         self._apply_appearance()
+        # First line of every fresh log: which build is running, so a feed pasted
+        # out of the Log tab into a support ticket is self-describing.
+        self.log(f"{APP_TITLE} v{__version__}.")
         self._setup_drag_and_drop()
         self._refresh_engine_info()
         if start_text is not None:
@@ -292,6 +295,8 @@ class PrivacyFilterApp(ctk.CTk):
         ctk.CTkLabel(header, text="Input text", font=self.title_font).pack(side="left")
         # Packed right-to-left, with "Redact" as the primary action far right:
         # Sample - Paste - Open - Redact - Clear.
+        # Built ghosted because the editor starts empty; _style_clear_button()
+        # gives it the active face as soon as there is text to clear.
         self.clear_button = ctk.CTkButton(
             header, text="Clear", width=58, height=26, command=self.clear_all,
             **theme.ghost_button(),
@@ -347,6 +352,10 @@ class PrivacyFilterApp(ctk.CTk):
         # at the top of the column exactly like the input editor does.
         self.tabs = TabDeck(body, VIEWS)
         self.tabs.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        # The deck opens on its first page, and a CTkSegmentedButton paints no
+        # selection at all until something is set(), so without this the banner
+        # showed an unhighlighted "Output" while the Output page was on screen.
+        self.view_switch.set(self.tabs.get() or VIEWS[0])
 
         output_tab = self.tabs.tab("Output")
         output_tab.grid_rowconfigure(1, weight=1)
@@ -441,6 +450,8 @@ class PrivacyFilterApp(ctk.CTk):
         log_actions.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 0))
         ctk.CTkLabel(log_actions, text="Activity log", font=self.small_font).pack(side="left")
         ctk.CTkButton(log_actions, text="Clear log", width=92, command=self._clear_log).pack(side="right")
+        # Built ghosted: the log is empty this moment. _style_copy_log_button()
+        # makes it active as soon as there is a line to copy.
         self.copy_log_button = ctk.CTkButton(
             log_actions, text="Copy log", width=92,
             command=self._copy_log, **theme.ghost_button(),
@@ -519,6 +530,8 @@ class PrivacyFilterApp(ctk.CTk):
         # Apply theme colors to the menu bar
         self._apply_menu_theme()
         self._style_warmup_button()  # keeps the warm/cold face on the current palette
+        self._style_clear_button()  # ditto for the availability of Clear ...
+        self._style_copy_log_button()  # ... and of Copy log
 
     def change_font_size(self, delta: int) -> None:
         size = max(8, min(24, int(self.settings.font_size) + delta))
@@ -605,6 +618,7 @@ class PrivacyFilterApp(ctk.CTk):
     def log(self, message: str, level: str = "info") -> None:
         if hasattr(self, "console"):
             self.console.log(message, level)
+            self._style_copy_log_button()  # the first line makes Copy log usable
 
     def report_callback_exception(self, exc_type, exc_value, exc_tb) -> int:  # noqa: ANN001
         import traceback
@@ -630,7 +644,9 @@ class PrivacyFilterApp(ctk.CTk):
         except Exception as exc:  # noqa: BLE001
             info = {"Engine": f"unavailable ({exc})"}
         self.engine_info_label.configure(
-            text="\n".join(f"{key}: {value}" for key, value in info.items())
+            text=formatting.wrap_long_tokens(
+                "\n".join(f"{key}: {value}" for key, value in info.items())
+            )
         )
 
     # ================================================================== #
@@ -714,8 +730,21 @@ class PrivacyFilterApp(ctk.CTk):
         Ghosted under the Demo engine too - regex detection has no model to warm.
         """
         ghosted = self.model_warm or self.settings.engine != "model"
+        self._apply_button_face(self.warmup_button, ghosted)
+
+    def _style_clear_button(self) -> None:
+        """`Clear` is offered only while the editor holds text: active with text
+        showing, ghosted on an empty input pane."""
+        self._apply_button_face(self.clear_button, not self.input_pane.get())
+
+    def _style_copy_log_button(self) -> None:
+        """`Copy log` is offered only while the activity log holds a line to copy."""
+        self._apply_button_face(self.copy_log_button, not self.console.text().strip())
+
+    def _apply_button_face(self, button: ctk.CTkButton, ghosted: bool) -> None:
+        """Paint one button either as a secondary (ghosted) or a primary (active) control."""
         options = theme.ghost_button() if ghosted else self._active_button_face()
-        self.warmup_button.configure(**options)
+        button.configure(**options)
 
     def _on_output_mode_choice(self, value: str) -> None:
         self.settings.output_mode = value
@@ -766,7 +795,9 @@ class PrivacyFilterApp(ctk.CTk):
         self._schedule_live_redact()
 
     def _update_char_count(self) -> None:
-        self.count_label.configure(text=f"{len(self.input_pane.get()):,} chars")
+        text = self.input_pane.get()
+        self.count_label.configure(text=f"{len(text):,} chars")
+        self._style_clear_button()  # an editor with text in it can be cleared
 
     def _schedule_live_redact(self) -> None:
         if not self.settings.live_detect:
@@ -1015,7 +1046,7 @@ class PrivacyFilterApp(ctk.CTk):
         self.summary_label.configure(text="No result yet.")
         self.metrics_label.configure(text="")
         self.output_hint.configure(text="Nothing redacted yet.")
-        self.count_label.configure(text="0 chars")
+        self._update_char_count()  # count label + ghosting the now-pointless Clear
         self.set_status("Cleared")
 
     # ------------------------- batch ------------------------- #
@@ -1144,11 +1175,8 @@ class PrivacyFilterApp(ctk.CTk):
 
         stats = outcome.by_label()
         headline = f"{outcome.span_count} span(s) in {formatting.format_latency(outcome.latency_ms)}"
-        self.summary_label.configure(
-            text="\n".join(
-                [headline] + [f"{count} x {display_name(label)}" for label, count in sorted(stats.items(), key=lambda kv: -kv[1])]
-            )
-        )
+        counts = [f"{count} x {display_name(label)}" for label, count in sorted(stats.items(), key=lambda kv: -kv[1])]
+        self.summary_label.configure(text=formatting.wrap_long_tokens("\n".join([headline] + counts)))
         self.metrics_label.configure(text=formatting.plain_summary(outcome))
         hint = f"Engine: {'OpenAI Privacy Filter' if outcome.engine == 'model' else 'Demo regex'}"
         if outcome.warning:
@@ -1251,6 +1279,7 @@ class PrivacyFilterApp(ctk.CTk):
     # ------------------------- misc ------------------------- #
     def _clear_log(self) -> None:
         self.console.clear()
+        self._style_copy_log_button()  # nothing left to copy
         self.set_status("Activity log cleared")
 
     def _copy_log(self) -> None:
@@ -1275,7 +1304,7 @@ class PrivacyFilterApp(ctk.CTk):
             spans += self.last_outcome.span_count
         messagebox.showinfo(
             APP_TITLE,
-            "Open Privacy Filter GUI\n\n"
+            f"{APP_TITLE} v{__version__}\n\n"
             "Desktop front-end for the open-weight 1.5B MoE PII redaction model "
             "(Apache 2.0) from OpenAI. Inference runs locally on your machine; text "
             "never leaves the device. The only network access is the one-time "

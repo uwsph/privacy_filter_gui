@@ -94,6 +94,56 @@ def table_rows(
 
 
 # --------------------------------------------------------------------- #
+# label text
+# --------------------------------------------------------------------- #
+#: Longest run of characters a narrow panel label can put on one line. Tk breaks
+#: a label's lines at *whitespace only*, so a value without spaces - the model
+#: checkpoint path, a long label name - never wraps: it runs past the edge of the
+#: Detection summary panel and is clipped.
+LABEL_MAX_RUN = 26
+
+#: Preferred break points inside an over-long word, so a path splits after a
+#: separator and a snake_case label after an underscore rather than mid-word.
+TOKEN_BREAK_AFTER = "/\\_-."
+
+
+def break_long_token(token: str, max_run: int = LABEL_MAX_RUN) -> list[str]:
+    """Split one whitespace-free ``token`` into pieces no longer than ``max_run``."""
+    limit = max(1, int(max_run))
+    pieces: list[str] = []
+    rest = token
+    while len(rest) > limit:
+        cut = limit
+        for index in range(limit, 0, -1):
+            if rest[index - 1] in TOKEN_BREAK_AFTER:
+                cut = index  # break after the last separator that still fits
+                break
+        pieces.append(rest[:cut])
+        rest = rest[cut:]
+    return pieces + [rest]
+
+
+def wrap_long_tokens(text: str, max_run: int = LABEL_MAX_RUN) -> str:
+    """Hard-break over-long words with newlines so a fixed-width label can wrap.
+
+    ``wraplength`` handles the words: an ordinary sentence wraps inside the panel
+    whatever its length. What it cannot do is break a single word longer than the
+    panel, which is why the Demo engine's wording wrapped neatly while the model
+    engine's ``Checkpoint: /home/ana/.opf/privacy_filter`` was cut off. Adding the
+    breaks here lets both engines render in full.
+    """
+    lines: list[str] = []
+    for line in str(text).splitlines() or [""]:
+        lines.append(
+            " ".join(
+                "\n".join(break_long_token(word, max_run)) if len(word) > max_run else word
+                for word in line.split(" ")
+            )
+        )
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------- #
 # files
 # --------------------------------------------------------------------- #
 def read_text_file(path: str | Path) -> str:
