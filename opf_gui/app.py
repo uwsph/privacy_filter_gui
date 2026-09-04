@@ -24,11 +24,11 @@ from .engine import (
     EngineController,
 )
 from .models import DECODE_MODES, Outcome, Settings, config_path, display_name
-from .widgets import Legend, LogConsole, SpanTable, TextPane
+from .widgets import Legend, LogConsole, SpanTable, TabDeck, TextPane
 
 APP_TITLE = "Open Privacy Filter GUI"
-_TAB_STRIP_FALLBACK = 42
-"""CTkTabview header allowance: 10 + 8 + (26-8) strip rows + 6 inner padding."""
+VIEWS = ("Output", "Review", "JSON", "Batch", "Log")
+"""Results views, switched by the segmented control in the top banner."""
 UPSTREAM_URL = "https://github.com/openai/privacy-filter"
 MODEL_URL = "https://huggingface.co/openai/privacy-filter"
 TEXT_TYPES = [("Text files", "*.txt *.md *.csv *.json *.jsonl *.log *.eml"), ("All files", "*.*")]
@@ -159,7 +159,7 @@ class PrivacyFilterApp(ctk.CTk):
         help_menu = tk.Menu(bar, tearoff=False)
         help_menu.add_command(label="About OPF GUI", command=self.show_about, accelerator="F1")
         help_menu.add_command(label="Upstream repository", command=self._open_upstream)
-        help_menu.add_command(label="Activity log", command=lambda: self.tabs.set("Log"))
+        help_menu.add_command(label="Activity log", command=lambda: self.show_view("Log"))
         bar.add_cascade(label="Help", menu=help_menu)
 
         try:
@@ -193,9 +193,19 @@ class PrivacyFilterApp(ctk.CTk):
             widget.grid(row=1, column=column, sticky="w", padx=(0, 14), pady=(1, 0))
         (self.engine_switch, self.model_switch, self.output_switch, self.device_switch,
          self.theme_switch) = (widget for _caption, widget in controls)
-        # Trailing spacer column keeps the switch row pinned to the left edge.
-        # ("Settings" and "Load model" used to sit here; settings live in
-        # View -> Advanced settings..., and load/unload is the Model toggle.)
+
+        # Results view switch, pinned to the right edge of the trailing spacer
+        # column - directly above the "Detection summary" panel. It used to be
+        # the CTkTabview strip above the "Redacted output" pane, where it stole
+        # 42 px of page height and jumped sideways (resizing both editors) every
+        # time a view asked for a different width. ("Settings" and "Load model"
+        # also used to sit in this row; settings live in View -> Advanced
+        # settings..., and load/unload is the Model toggle.)
+        ctk.CTkLabel(inner, text="Results view", font=self.small_font).grid(
+            row=0, column=len(controls) + 1, sticky="e"
+        )
+        self.view_switch = ctk.CTkSegmentedButton(inner, values=list(VIEWS), command=self._on_view_choice)
+        self.view_switch.grid(row=1, column=len(controls) + 1, sticky="e", pady=(1, 0))
         inner.grid_columnconfigure(len(controls) + 1, weight=1)
 
         # reflect persisted settings
@@ -247,52 +257,38 @@ class PrivacyFilterApp(ctk.CTk):
                     relief="flat",
                 )
 
-    def _tab_strip_height(self) -> int:
-        """Pixels CTkTabview spends above its content area, plus its inner padding.
-
-        customtkinter reserves three grid rows for the tab strip (outer spacing,
-        button overhang, button height) and then pads the tab frame by its corner
-        radius. Reading the live values keeps the input editor aligned when
-        widget scaling is not 1.0.
-        """
-        total = 0.0
-        try:
-            for row in (0, 1, 2):
-                raw = str(self.tabs.grid_rowconfigure(row, "minsize"))
-                total += float(raw.split()[-1])
-            total += 6  # tab content frame padding (max(corner_radius, border_width))
-        except Exception:  # pragma: no cover - depends on Tk introspection quirks
-            return _TAB_STRIP_FALLBACK
-        return int(round(total)) or _TAB_STRIP_FALLBACK
-
     def _build_body(self) -> None:
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(side="top", fill="both", expand=True, padx=12, pady=(6, 0))
-        body.grid_columnconfigure(0, weight=11)
-        body.grid_columnconfigure(1, weight=13)
+        # One uniform group for the two editor columns: they always split the
+        # space down the middle, whatever a results view asks for. While the
+        # views carried their own strip, the widest view (Batch) propped its
+        # column open and dragged the divider off centre whenever a view was
+        # clicked.
+        body.grid_columnconfigure(0, weight=1, uniform="panes")
+        body.grid_columnconfigure(1, weight=1, uniform="panes")
         body.grid_columnconfigure(2, weight=0, minsize=232)
         body.grid_rowconfigure(0, weight=1)
 
         # ---------------- left: input editor ---------------- #
-        # Row plan (kept in lockstep with the Output tab so both text panes have
-        # the same height and the same top/bottom edges):
-        #   0 spacer matching the CTkTabview tab strip
-        #   1 action buttons + caption
-        #   2 the editor itself (grows)
-        #   3 char count + view switches
-        left = ctk.CTkFrame(body)
+        # Row plan (mirrored row-for-row by the Output view so both text panes
+        # have the same height and the same top/bottom edges):
+        #   0 action buttons + caption
+        #   1 the editor itself (grows)
+        #   2 char count + view switches
+        # fg_color: match the results page one shade in, so both editor panes sit
+        # on the same grey (a bare CTkFrame would paint the lighter outer shade).
+        left = ctk.CTkFrame(body, fg_color=theme.nested_panel_bg())
         self.left_column = left
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        left.grid_rowconfigure(0, minsize=_TAB_STRIP_FALLBACK)
-        left.grid_rowconfigure(1, minsize=34)
-        left.grid_rowconfigure(2, weight=1)
-        # +6 absorbs the tabview's inner content padding along the bottom edge.
-        left.grid_rowconfigure(3, minsize=32)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left.grid_rowconfigure(0, minsize=34)
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_rowconfigure(2, minsize=32)
         left.grid_columnconfigure(0, weight=1)
 
         # Actions live above the editor (mirrors "Redacted output").
         header = ctk.CTkFrame(left, fg_color="transparent")
-        header.grid(row=1, column=0, sticky="ew", padx=8, pady=(6, 0))
+        header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 0))
         ctk.CTkLabel(header, text="Input text", font=self.title_font).pack(side="left")
         # Packed right-to-left, with "Redact" as the primary action far right:
         # Sample - Paste - Open - Redact - Clear.
@@ -325,10 +321,10 @@ class PrivacyFilterApp(ctk.CTk):
             on_change=self._on_input_change,
             undo=True,
         )
-        self.input_pane.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 6))
+        self.input_pane.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 6))
 
         input_footer = ctk.CTkFrame(left, fg_color="transparent")
-        input_footer.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+        input_footer.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.count_label = ctk.CTkLabel(input_footer, text="0 chars", font=self.small_font)
         self.count_label.pack(side="left")
         self.live_switch = ctk.CTkSwitch(
@@ -346,20 +342,17 @@ class PrivacyFilterApp(ctk.CTk):
         if self.settings.live_detect:
             self.live_switch.select()
 
-        # ---------------- middle: results tabs ---------------- #
-        self.tabs = ctk.CTkTabview(body, anchor="center")
-        self.tabs.grid(row=0, column=1, sticky="nsew")
-        for name in ("Output", "Review", "JSON", "Batch", "Log"):
-            self.tabs.add(name)
-        # Now that the tabview exists, match the spacer to its real (HiDPI
-        # scaled) tab strip so the two editors start at the same pixel row.
-        left.grid_rowconfigure(0, minsize=self._tab_strip_height())
+        # ---------------- middle: results views ---------------- #
+        # A strip-less deck: the switch lives in the banner, so the pages start
+        # at the top of the column exactly like the input editor does.
+        self.tabs = TabDeck(body, VIEWS)
+        self.tabs.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
 
         output_tab = self.tabs.tab("Output")
         output_tab.grid_rowconfigure(1, weight=1)
         output_tab.grid_columnconfigure(0, weight=1)
         output_tab.grid_rowconfigure(0, minsize=34)
-        output_tab.grid_rowconfigure(2, minsize=26)
+        output_tab.grid_rowconfigure(2, minsize=32)
         self.output_pane = TextPane(
             output_tab, height=18, font=self.tk_mono_font, readonly=True, undo=False
         )
@@ -758,6 +751,14 @@ class PrivacyFilterApp(ctk.CTk):
         if self.settings.live_detect:
             self.log("Auto-redact is on - best paired with the Demo engine or a warm model.")
 
+    def _on_view_choice(self, value: str) -> None:
+        self.show_view(value)
+
+    def show_view(self, name: str) -> None:
+        """Switch the results deck and keep the banner switch pointing at it."""
+        self.tabs.set(name)
+        self.view_switch.set(name)
+
     def _on_input_change(self) -> None:
         self._update_char_count()
         if not self.settings.live_detect:
@@ -985,7 +986,7 @@ class PrivacyFilterApp(ctk.CTk):
         label = paths[0].name if len(paths) == 1 else f"{len(paths)} files"
         self.log(f"Dropped {label}.")
         if len(paths) > 1:
-            self.tabs.set("Batch")
+            self.show_view("Batch")
         self._load_paths(paths)
 
     @staticmethod
@@ -1171,7 +1172,7 @@ class PrivacyFilterApp(ctk.CTk):
 
     def _on_span_selected(self, span) -> None:  # noqa: ANN001
         self.review_pane.locate(span)
-        self.tabs.set("Review")
+        self.show_view("Review")
         if self.last_outcome is not None and self.settings.highlight_input:
             if self.input_pane.get() == self.last_outcome.text:
                 self.input_pane.locate(span)

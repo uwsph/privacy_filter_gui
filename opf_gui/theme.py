@@ -113,6 +113,33 @@ ACTIVE_BUTTON: dict[str, object] = {
 }
 
 
+#: The fill customtkinter gives a panel nested inside another panel (its
+#: ``CTkFrame.top_fg_color``) - the shade the results panel paints behind its
+#: widgets. The fallback below is the light/dark equivalent of customtkinter's
+#: own ``gray81``/``gray20`` panel tokens, used when the live theme can't be read.
+NESTED_PANEL_BG: tuple[str, str] = ("#cfcfcf", "#333333")
+
+
+def nested_panel_bg() -> tuple[str, str]:
+    """ ``(light, dark)`` fill of a nested panel, read from the live theme.
+
+    customtkinter gives a plain ``CTkFrame`` the outer panel shade and a frame
+    nested in another frame the inner (``top_fg_color``) shade. The results deck
+    nests a page frame per view, so the results pane reads one grey darker than a
+    bare panel - read the value instead of hard-coding it so both editors match in
+    either appearance mode and under any colour theme.
+    """
+    try:
+        from customtkinter.windows.widgets.theme.theme_manager import ThemeManager  # noqa: PLC0415
+
+        value = ThemeManager.theme["CTkFrame"]["top_fg_color"]
+    except Exception:  # noqa: BLE001 - stubbed or relocated internals
+        return NESTED_PANEL_BG
+    if isinstance(value, str):
+        return (value, value)
+    return (value[0], value[1])
+
+
 def resolve_mode(appearance: str, actual: str = "dark") -> str:
     """Map a user appearance preference to a concrete ``dark``/``light`` mode.
 

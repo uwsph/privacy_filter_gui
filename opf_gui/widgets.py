@@ -6,6 +6,7 @@ are required, because customtkinter's ``CTkTextbox`` does not expose tags.
 
 from __future__ import annotations
 
+import customtkinter as ctk
 import tkinter as tk
 from contextlib import contextmanager
 from datetime import datetime
@@ -25,6 +26,47 @@ def span_tag(label: str) -> str:
 
 def _offset_index(offset: int) -> str:
     return f"1.0+{max(0, int(offset))}c"
+
+
+class TabDeck(ctk.CTkFrame):
+    """A tabbed pane without a tab strip: pages share one cell, one is visible.
+
+    ``CTkTabview`` draws its strip inside its own frame, which costs the page
+    area a ~42 px band, and it centres that strip - so the strip slid sideways
+    and the editors resized every time a page asked for a different width. The
+    app keeps the switch in the top banner instead, which lets the pages fill
+    their column and keeps both text panes the same size in every view.
+
+    ``tab()``/``set()``/``get()`` mirror the ``CTkTabview`` calls they replace.
+    """
+
+    def __init__(self, master: Any, pages: Sequence[str], **kwargs: Any) -> None:
+        kwargs.setdefault("corner_radius", 6)
+        super().__init__(master, **kwargs)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self._pages: dict[str, Any] = {name: ctk.CTkFrame(self) for name in pages}
+        self._current = ""
+        if pages:
+            self.set(pages[0])
+
+    def tab(self, name: str) -> Any:
+        """The page frame for ``name``."""
+        try:
+            return self._pages[name]
+        except KeyError:
+            raise KeyError(f"unknown view {name!r}") from None
+
+    def get(self) -> str:
+        return self._current
+
+    def set(self, name: str) -> None:
+        """Show the page ``name``; the page it replaces is unmapped, not destroyed."""
+        page = self.tab(name)
+        if self._current and self._current != name:
+            self._pages[self._current].grid_forget()
+        page.grid(row=0, column=0, sticky="nsew")
+        self._current = name
 
 
 class TextPane(tk.Frame):

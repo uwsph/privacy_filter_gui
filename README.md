@@ -11,7 +11,7 @@ and export redacted text or schema-shaped JSON. Built with Python +
 
 ```
 opf_gui/
-  app.py          main window, tabs, toolbar, dialogs
+  app.py          main window, results views, toolbar, dialogs
   backends.py     real `opf` backend + offline regex demo backend
   dnd.py          optional drag & drop (tkinterdnd2), degrades silently
   engine.py       worker thread, cancel, progress messages
@@ -76,24 +76,34 @@ still starts and the Log tab says drag & drop is off.
 ## Using it
 
 1. **Get text in** — the input buttons run in workflow order:
-   `Sample` · `Paste` · `Open` · `Redact` · `Clear` · `Cancel`.
+   `Sample` · `Paste` · `Open` · `Redact` · `Clear`.
    `Open` accepts multiple files; folders can also be **dropped onto the editor**
    (needs `tkinterdnd2` - listed by `--check`; the app logs a note and carries on without it).
 2. **Redact** — `Redact` (or `Ctrl+Return`). The model runs in a worker thread,
    so the window stays responsive; `Cancel` (`Esc`) abandons a long job.
-3. **Review** — the `Review` tab lists every span (label, text, offsets, score,
+3. **Review** — the `Review` view lists every span (label, text, offsets, score,
    action). Click a row to jump to it in both panes; click a highlighted span in
    the input pane to select it in the table.
 4. **Export** — `Copy`/`Save` for redacted text, plus JSON (OPF schema), JSONL
-   for batches, and a Markdown report on the `Batch` tab.
+   for batches, and a Markdown report on the `Batch` view.
 
-Tabs: **Output** · **Review** · **JSON** · **Batch** · **Log**. The Log tab is the running
+Results views: **Output** · **Review** · **JSON** · **Batch** · **Log**, switched by the
+segmented control on the right of the toolbar (above the Detection summary), so the two
+editor panes keep the same size in every view. The Log view is the running
 activity feed (engine loads, redaction timings, file and export actions); warnings and
 errors are colour-coded, `Copy log` puts the whole feed on the clipboard for support tickets,
 and it trims itself to the last ~1000 lines.
-Toolbar: engine (`model`/`demo`), labels (`typed`/`redacted`), decode
-(`viterbi`/`argmax`), device (`auto`/`cpu`/`cuda`), theme (`dark`/`light`),
-`Settings…`. The sidebar shows engine status, span counts and the colour legend.
+Toolbar: engine (`model`/`demo`), model (`load`/`unload`), labels (`typed`/`redacted`),
+device (`auto`/`cpu`/`cuda`), theme (`dark`/`light`), results view (`Output`/`Review`/`JSON`/
+`Batch`/`Log`). The Model toggle follows the engine:
+`load` pulls the checkpoint into RAM (offering the one-time download if needed), `unload`
+frees it again, and the segment tracks what is really resident - warm-up and the first
+redaction also count as loaded. The sidebar shows engine status, span counts, the colour
+legend and `Warm up model`; the full option sheet is under `View -> Advanced settings...`
+and `Run` still offers Load / Warm up / Unload.
+`Warm up model` is its own status light: accent-coloured like the other action buttons
+while the model is cold, ghosted once a pass has run. Unloading or switching engine makes
+the model cold again, and it is ghosted on the Demo engine, where there is no model to warm.
 
 ### Shortcuts
 
@@ -155,7 +165,8 @@ output leaves the building.
   the checkpoint and enough RAM look available; `Settings…` lets you point at a
   local checkpoint directory.
 - **First run is slow** → the checkpoint download plus model warm-up; use
-  `Warm up model` in the sidebar, and `Unload model (free RAM)` when done.
+  `Warm up model` in the sidebar, and set the toolbar `Model` toggle to `unload`
+  (or `Run -> Unload model (free memory)`) when done.
 
 ## Colophon
 
