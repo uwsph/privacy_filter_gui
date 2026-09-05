@@ -22,6 +22,10 @@ MESSAGEBOX_CALLS: list[tuple[str, tuple[Any, ...]]] = []
 DIALOG_ANSWERS: dict[str, Any] = {}
 CLIPBOARD: list[str] = []
 APPEARANCE: dict[str, str] = {"mode": "Dark"}
+#: Answers a blocking popup on the user's behalf: a test sets this to a callable that
+#: gets the widget whose ``wait_window`` was called (and dismisses it). Left None, the
+#: popup is never dismissed, so a question reads as "no answer" - the safe default.
+WAIT_HOOK: Callable[[Any], None] | None = None
 
 
 class TclError(Exception):
@@ -182,6 +186,13 @@ class Widget:
 
     def update(self) -> None:
         pass
+
+    def wait_window(self, *_args: Any) -> None:
+        """Block for a window to close - ``WAIT_HOOK`` plays the user's part."""
+        self._record("wait_window", {})
+        hook = WAIT_HOOK
+        if hook is not None:
+            hook(self)
 
     def destroy(self) -> None:
         self._record("destroy", {})
@@ -973,6 +984,8 @@ def ttk_of(tkinter: types.ModuleType) -> types.ModuleType:
 
 def reset() -> None:
     """Clear recorded state between tests."""
+    global WAIT_HOOK
+    WAIT_HOOK = None
     UNKNOWN_CALLS.clear()
     MESSAGEBOX_CALLS.clear()
     DIALOG_ANSWERS.clear()

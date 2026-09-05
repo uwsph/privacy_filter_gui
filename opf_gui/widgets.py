@@ -81,9 +81,12 @@ class MessageDialog(ctk.CTkToplevel):
     own platform grey whatever appearance mode the app is in: Help -> About used to
     show a light grey icon plate, message area and OK button inside a charcoal
     window. This popup is a ``CTkToplevel`` carrying customtkinter widgets, so the
-    window, the text and the button all follow the live theme, and the canvas the
+    window, the text and the buttons all follow the live theme, and the canvas the
     icon is drawn on is painted the window's own fill - read from the live theme,
     not hard-coded - so nothing reads as a foreign grey plate.
+
+    One label answers with the accent face, any second label is the ghosted face the
+    toolbar uses, and the label that closed the popup is kept in :attr:`result`.
     """
 
     ICON_SIZE = 44
@@ -99,17 +102,20 @@ class MessageDialog(ctk.CTkToplevel):
         title: str,
         message: str,
         icon: str = "info",
-        ok_text: str = "OK",
-        on_ok: Callable[[], None] | None = None,
+        buttons: Sequence[str] = ("OK",),
         on_close: Callable[[], None] | None = None,
         font: Any = None,
         title_font: Any = None,
     ) -> None:
         super().__init__(master)
         self.master_app = master
-        self._icon = icon
+        self.icon = icon
         self._message = str(message)
-        self._on_ok = on_ok
+        self.button_labels = tuple(str(label) for label in buttons) or ("OK",)
+        #: Which button (if any) dismissed the popup; Escape and the window's own
+        #: close leave it None, which reads as "no" to a question.
+        self.result: str | None = None
+        self.buttons: dict[str, Any] = {}
         self._on_close = on_close
         self._font = font if font is not None else theme.ui_font(12)
         self._title_font = title_font if title_font is not None else theme.ui_font(13, "bold")
@@ -140,9 +146,20 @@ class MessageDialog(ctk.CTkToplevel):
         )
         self.message_label.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=20, pady=(2, 14))
 
-        self.ok_button = ctk.CTkButton(self, text=ok_text, width=104, height=30,
-                                       font=self._font, command=self.accept)
-        self.ok_button.grid(row=2, column=0, columnspan=2, pady=(0, 18))
+        # Packed right-to-left in the order given, so the primary answer sits
+        # furthest right - where a default button sits on Windows and macOS.
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.grid(row=2, column=0, columnspan=2, pady=(0, 18))
+        primary = self.button_labels[0]
+        for offset, label in enumerate(self.button_labels):
+            is_primary = label == primary
+            button = ctk.CTkButton(
+                actions, text=label, width=104, height=30, font=self._font,
+                command=lambda which=label: self._answer(which),
+                **({} if is_primary else theme.ghost_button()),
+            )
+            button.pack(side="right", padx=(0, 0) if offset == 0 else (0, 8))
+            self.buttons[label] = button
 
         self.apply_appearance(_appearance_mode())
         self._center_on_master()
@@ -157,11 +174,38 @@ class MessageDialog(ctk.CTkToplevel):
         """The body the popup shows."""
         return self._message
 
+    @property
+    def primary_button(self) -> Any:
+        """The accent-faced button - the one Enter presses."""
+        return self.buttons[self.button_labels[0]]
+
+    def button(self, label: str) -> Any:
+        """One of the popup's buttons by caption."""
+        try:
+            return self.buttons[label]
+        except KeyError:
+            raise KeyError(f"this popup has no {label!r} button") from None
+
     def accept(self) -> None:
-        """OK / Enter: run the callback, then dismiss."""
+        """Enter: the primary answer."""
+        self._answer(self.button_labels[0])
+
+    def _answer(self, label: str) -> None:
+        self.result = label
         self.close()
-        if self._on_ok is not None:
-            self._on_ok()
+
+    def wait_for_result(self) -> str | None:
+        """Block until the popup is dismissed, then say which button closed it.
+
+        A Tk question box is blocking and its caller acts on the answer, so this
+        keeps those call sites straight-line code instead of callbacks:
+        ``wait_window`` runs a nested event loop, which is what the native box did.
+        """
+        try:
+            self.wait_window()
+        except tk.TclError:  # pragma: no cover - window destroyed as it opened
+            pass
+        return self.result
 
     def _on_escape(self, _event: Any) -> str:
         self.close()
@@ -172,7 +216,7 @@ class MessageDialog(ctk.CTkToplevel):
         return "break"  # else the window-wide Enter (redact) fires as well
 
     def close(self) -> None:
-        """Dismiss the popup - every way out (OK, Escape, the window's own X) lands here."""
+        """Dismiss the popup - every way out (a button, Escape, the window's X) lands here."""
         try:
             self.grab_release()
         except Exception:  # noqa: BLE001 - no grab to release (already gone, no display)
@@ -186,7 +230,7 @@ class MessageDialog(ctk.CTkToplevel):
     # ------------------------------------------------------------------ #
     def apply_appearance(self, mode: str) -> None:
         """Repaint the parts customtkinter cannot theme by itself (the icon)."""
-        self._colors = theme.dialog_palette("light" if mode == "light" else "dark", self._icon)
+        self._colors = theme.dialog_palette("light" if mode == "light" else "dark", self.icon)
         colors = self._colors
         self.icon_canvas.configure(bg=colors["bg"])
         self.title_label.configure(text_color=colors["fg"])
@@ -204,13 +248,13 @@ class MessageDialog(ctk.CTkToplevel):
         glyph = self._colors["glyph"]
         s = self.ICON_SIZE / 44
         canvas.delete("all")
-        if self._icon == "warning":
+        if self.icon == "warning":
             canvas.create_polygon(2 * s, 38 * s, 22 * s, 4 * s, 42 * s, 38 * s, fill=badge, outline="")
             canvas.create_rectangle(19 * s, 16 * s, 25 * s, 29 * s, fill=glyph, outline="")
             canvas.create_oval(19 * s, 31 * s, 25 * s, 37 * s, fill=glyph, outline="")
             return
         canvas.create_oval(2 * s, 2 * s, 42 * s, 42 * s, fill=badge, outline="")
-        if self._icon == "error":
+        if self.icon == "error":
             canvas.create_line(15 * s, 15 * s, 29 * s, 29 * s, fill=glyph, width=5 * s, capstyle="round")
             canvas.create_line(29 * s, 15 * s, 15 * s, 29 * s, fill=glyph, width=5 * s, capstyle="round")
             return

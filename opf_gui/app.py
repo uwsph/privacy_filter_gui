@@ -6,7 +6,7 @@ import sys
 import tkinter as tk
 from collections.abc import Sequence
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 import customtkinter as ctk
 
@@ -28,6 +28,9 @@ from .widgets import Legend, LogConsole, MessageDialog, SpanTable, TabDeck, Text
 
 APP_TITLE = "Open Privacy Filter GUI"
 VIEWS = ("Output", "Review", "JSON", "Batch", "Log")
+#: Registry key of the About popup: open once whatever its text says, so hammering
+#: F1 cannot stack copies even though the session counts it prints keep changing.
+ABOUT_POPUP = ("about",)
 """Results views, switched by the segmented control in the top banner."""
 UPSTREAM_URL = "https://github.com/openai/privacy-filter"
 MODEL_URL = "https://huggingface.co/openai/privacy-filter"
@@ -66,9 +69,11 @@ class PrivacyFilterApp(ctk.CTk):
         #: A model inference pass has run since the backend was built. Drives the
         #: "Warm up model" button: solid while cold, ghosted once warm.
         self.model_warm = False
-        #: The Help -> About popup, while it is open. Held so F1 cannot stack a
-        #: second copy of it and so a theme switch can repaint it.
+        #: The Help -> About popup, while it is open (its registry key is ABOUT_POPUP).
         self.about_dialog: MessageDialog | None = None
+        #: Every themed popup this window owns, keyed for "one at most" re-focus and
+        #: for the repaint that a dark/light switch triggers.
+        self.message_popups: dict[tuple[str, ...], MessageDialog] = {}
 
         try:
             ctk.set_default_color_theme(self.settings.color_theme)
@@ -122,7 +127,7 @@ class PrivacyFilterApp(ctk.CTk):
         size = int(self.settings.font_size)
         self.ui_font = ctk.CTkFont(size=size)
         self.title_font = ctk.CTkFont(size=size + 2, weight="bold")
-        self.small_font = ctk.CTkFont(size=max(9, size - 2))
+        self.small_font = ctk.CTkFont(size=max(11, size - 2))
         self.tk_ui_font = theme.ui_font(size)
         self.tk_mono_font = theme.mono_font(size)
 
@@ -539,13 +544,11 @@ class PrivacyFilterApp(ctk.CTk):
 
     def _repaint_open_dialogs(self, mode: str) -> None:
         """Re-theme the popups this window owns that outlived the theme switch."""
-        dialog = self.about_dialog
-        if dialog is None:
-            return
-        try:
-            dialog.apply_appearance(mode)
-        except tk.TclError:  # pragma: no cover - closed between the switch and the repaint
-            self.about_dialog = None
+        for key, dialog in list(self.message_popups.items()):
+            try:
+                dialog.apply_appearance(mode)
+            except tk.TclError:  # pragma: no cover - closed between the switch and the repaint
+                self.message_popups.pop(key, None)
 
     def change_font_size(self, delta: int) -> None:
         size = max(8, min(24, int(self.settings.font_size) + delta))
@@ -576,7 +579,7 @@ class PrivacyFilterApp(ctk.CTk):
         if self.settings.engine == "model" and not status.installed:
             self.log("OpenAI Privacy Filter package is not installed - switching to Demo engine.", level="warn")
             self._set_engine("demo", notify=True)
-            messagebox.showwarning(APP_TITLE, INSTALL_HINT, parent=self)
+            self.show_popup(INSTALL_HINT, kind="warning")
         elif self.settings.engine == "model":
             self.log(f"Model engine: {status.detail}")
             if status.checkpoint_present and self.settings.auto_load_model:
@@ -634,6 +637,68 @@ class PrivacyFilterApp(ctk.CTk):
             self.console.log(message, level)
             self._style_copy_log_button()  # the first line makes Copy log usable
 
+    # ================================================================== #
+    # popups
+    # ================================================================== #
+    def show_popup(self, message: str, *, kind: str = "info", title: str = APP_TITLE,
+                   key: tuple[str, ...] | None = None) -> MessageDialog:
+        """Open a themed info/warning/error popup, re-focusing one already on screen.
+
+        Tk's own message box is drawn by Tk and keeps its platform grey in dark mode,
+        so nothing here uses it. ``key`` marks a popup that must exist at most once
+        whatever its text says; otherwise the text itself identifies it, so clicking
+        the same control twice re-focuses the popup instead of piling up a copy.
+        """
+        identity = key if key is not None else (kind, title, str(message))
+        already_open = self.open_popup(identity)
+        if already_open is not None:
+            already_open.lift()
+            already_open.focus_force()
+            return already_open
+        dialog = MessageDialog(
+            self, title=title, message=str(message), icon=kind,
+            font=self.tk_ui_font, title_font=self._popup_title_font(),
+            on_close=lambda: self._popup_closed(identity),
+        )
+        self.message_popups[identity] = dialog
+        return dialog
+
+    def ask_popup(self, message: str, *, kind: str = "warning", title: str = APP_TITLE,
+                  yes: str = "Yes", no: str = "No") -> bool:
+        """A blocking themed question box: True only when ``yes`` was the answer.
+
+        Modal and blocking, exactly like the box it replaces, so the caller can act
+        on the answer inline - and so it needs no entry in ``message_popups``, since
+        nothing else can run while it holds the grab.
+        """
+        dialog = MessageDialog(
+            self, title=title, message=str(message), icon=kind, buttons=(yes, no),
+            font=self.tk_ui_font, title_font=self._popup_title_font(),
+        )
+        return dialog.wait_for_result() == yes
+
+    def open_popup(self, key: tuple[str, ...]) -> MessageDialog | None:
+        """The popup registered under ``key``, for as long as it is still open."""
+        dialog = self.message_popups.get(key)
+        if dialog is None:
+            return None
+        try:
+            if dialog.winfo_exists():
+                return dialog
+        except tk.TclError:  # pragma: no cover - closed between the two looks
+            pass
+        self.message_popups.pop(key, None)
+        return None
+
+    def _popup_closed(self, key: tuple[str, ...]) -> None:
+        self.message_popups.pop(key, None)
+        if key == ABOUT_POPUP:
+            self.about_dialog = None
+
+    def _popup_title_font(self) -> tuple[str, int, str]:
+        """One size above the body font, matching the app's other headings."""
+        return theme.ui_font(int(self.settings.font_size) + 1, "bold")  # type: ignore[return-value]
+
     def report_callback_exception(self, exc_type, exc_value, exc_tb) -> int:  # noqa: ANN001
         import traceback
 
@@ -685,7 +750,7 @@ class PrivacyFilterApp(ctk.CTk):
             if not status.installed:
                 self.log("opf package missing - staying on Demo.", level="warn")
                 self._set_engine("demo")
-                messagebox.showwarning(APP_TITLE, INSTALL_HINT, parent=self)
+                self.show_popup(INSTALL_HINT, kind="warning")
             elif not status.checkpoint_present:
                 self.log(status.detail)
 
@@ -871,15 +936,13 @@ class PrivacyFilterApp(ctk.CTk):
         """
         status = model_status(self.settings.checkpoint)
         if not status.installed:
-            messagebox.showwarning(APP_TITLE, INSTALL_HINT, parent=self)
+            self.show_popup(INSTALL_HINT, kind="warning")
             return False
         if not status.checkpoint_present:
-            proceed = messagebox.askyesno(
-                APP_TITLE,
+            proceed = self.ask_popup(
                 "No local checkpoint was found.\n\n"
                 f"{status.detail}\n\nThe first load downloads the model from HuggingFace "
                 "(about 1.5 GB, one time). Download and load now?",
-                parent=self,
             )
             if not proceed:
                 self.set_status("Model load cancelled")
@@ -936,7 +999,7 @@ class PrivacyFilterApp(ctk.CTk):
         try:
             content = formatting.read_text_file(paths[0])
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Could not read file:\n{exc}", parent=self)
+            self.show_popup(f"Could not read file:\n{exc}", kind="error")
             return
         self.input_pane.set(content)
         self.current_source = str(paths[0])
@@ -1079,7 +1142,7 @@ class PrivacyFilterApp(ctk.CTk):
             return
         found = self._expand_dropped([Path(folder).expanduser()])
         if not found:
-            messagebox.showinfo(APP_TITLE, "No supported text files in that folder.", parent=self)
+            self.show_popup("No supported text files in that folder.")
             return
         self._extend_batch(found)
 
@@ -1172,7 +1235,7 @@ class PrivacyFilterApp(ctk.CTk):
         self._save_settings()
         self.log(f"Batch export complete: {written} file(s) + results.jsonl + report.md -> {target}")
         self.set_status(f"Exported {written} file(s) to {target.name}")
-        messagebox.showinfo(APP_TITLE, f"Exported {written} redacted file(s) to:\n{target}", parent=self)
+        self.show_popup(f"Exported {written} redacted file(s) to:\n{target}")
 
     # ------------------------- results ------------------------- #
     def show_outcome(self, outcome: Outcome) -> None:
@@ -1256,7 +1319,7 @@ class PrivacyFilterApp(ctk.CTk):
         formatting.write_text_file(path, self.last_outcome.redacted_text)
         self._remember_export(path)
         self.log(f"Wrote redacted text to {path}")
-        messagebox.showinfo(APP_TITLE, f"Redacted text saved to:\n{path}", parent=self)
+        self.show_popup(f"Redacted text saved to:\n{path}")
 
     def save_json(self) -> None:
         if self.last_outcome is None:
@@ -1309,41 +1372,26 @@ class PrivacyFilterApp(ctk.CTk):
         message = f"OpenAI Privacy Filter\n\nCode: {UPSTREAM_URL}\nWeights: {MODEL_URL}\n\nCopy the link from this dialog."
         self.clipboard_clear()
         self.clipboard_append(UPSTREAM_URL)
-        messagebox.showinfo(APP_TITLE, message + "\n\n(repo link copied to clipboard)", parent=self)
+        self.show_popup(message + "\n\n(repo link copied to clipboard)")
 
     def show_about(self) -> None:
-        """Help -> About (and F1): a themed popup, not Tk's grey native message box."""
+        """Help -> About (and F1): one themed popup, never a stack of copies."""
         documents = len(self.batch_outcomes) + (1 if self.last_outcome else 0)
         spans = sum(item.span_count for item in self.batch_outcomes)
         if self.last_outcome is not None:
             spans += self.last_outcome.span_count
-        existing = self.about_dialog
-        if existing is not None:
-            try:
-                existing.lift()
-                existing.focus_set()
-                return
-            except tk.TclError:
-                self.about_dialog = None  # closed since it was opened
-        self.about_dialog = MessageDialog(
-            self,
-            title=APP_TITLE,
-            icon="info",
-            on_close=lambda: setattr(self, "about_dialog", None),
-            font=self.tk_ui_font,
-            title_font=theme.ui_font(int(self.settings.font_size) + 1, "bold"),
-            message=(
-                f"{APP_TITLE} v{__version__}\n\n"
-                "Desktop front-end for the open-weight 1.5B MoE PII redaction model "
-                "(Apache 2.0) from OpenAI. Inference runs locally on your machine; text "
-                "never leaves the device. The only network access is the one-time "
-                "checkpoint download from HuggingFace.\n\n"
-                f"Session documents: {documents}\n"
-                f"Session PII spans: {spans}\n"
-                f"Config file: {config_path()}\n\n"
-                "This GUI is licensed under the Apache License 2.0.\n"
-                "Demo engine = regex heuristics for interface previews only."
-            ),
+        self.about_dialog = self.show_popup(
+            f"{APP_TITLE} v{__version__}\n\n"
+            "Desktop front-end for the open-weight 1.5B MoE PII redaction model "
+            "(Apache 2.0) from OpenAI. Inference runs locally on your machine; text "
+            "never leaves the device. The only network access is the one-time "
+            "checkpoint download from HuggingFace.\n\n"
+            f"Session documents: {documents}\n"
+            f"Session PII spans: {spans}\n"
+            f"Config file: {config_path()}\n\n"
+            "This GUI is licensed under the Apache License 2.0.\n"
+            "Demo engine = regex heuristics for interface previews only.",
+            key=ABOUT_POPUP,
         )
 
     def _on_close(self) -> None:

@@ -19,7 +19,8 @@ from stub_gui import DIALOG_ANSWERS, MESSAGEBOX_CALLS, SimpleNamespace  # noqa: 
 stub_gui.install()
 
 from opf_gui import __version__, dnd, formatting, theme  # noqa: E402
-from opf_gui.app import ACCEPTED_BATCH, APP_TITLE, VIEWS, PrivacyFilterApp  # noqa: E402
+from opf_gui.app import ABOUT_POPUP, ACCEPTED_BATCH, APP_TITLE, VIEWS, PrivacyFilterApp  # noqa: E402
+from opf_gui.backends import INSTALL_HINT  # noqa: E402
 from opf_gui.models import Outcome, Settings, Span  # noqa: E402
 from opf_gui.widgets import MessageDialog, span_tag  # noqa: E402
 
@@ -40,6 +41,31 @@ def make_app(start_text: str | None = SAMPLE, **overrides) -> PrivacyFilterApp: 
 HEADER_BUTTONS = (
     "clear_button", "redact_button", "open_button", "paste_button", "sample_button",
 )
+
+
+def open_popups(app: Any) -> list[Any]:
+    """Every themed popup the window is holding open right now."""
+    return list(app.message_popups.values())
+
+
+def popup_texts(app: Any) -> list[str]:
+    return [dialog.message_text() for dialog in open_popups(app)]
+
+
+def answer_popups(*labels: str) -> None:
+    """Reply to a blocking question box: the labels are pressed in order.
+
+    ``stub_gui.WAIT_HOOK`` stands in for the user while ``ask_popup`` blocks - the
+    stubbed ``wait_window`` hands straight back, so the call stays inline.
+    """
+    queue = list(labels)
+
+    def respond(dialog: Any) -> None:
+        label = queue.pop(0) if queue else None
+        if label is not None:
+            dialog.button(label).invoke()
+
+    stub_gui.WAIT_HOOK = respond
 
 
 def widget_texts(widget: Any) -> list[str]:
@@ -438,7 +464,8 @@ class TestRedactionFlow(unittest.TestCase):
         self.assertEqual(self.app.settings.engine, "demo")
         self.assertEqual(self.app.engine_switch.get(), "demo")
         self.assertIn("opf package missing", self.app.log_box.get())
-        self.assertTrue(MESSAGEBOX_CALLS and MESSAGEBOX_CALLS[-1][0] == "showwarning")
+        self.assertEqual(popup_texts(self.app), [INSTALL_HINT])
+        self.assertEqual(open_popups(self.app)[0].icon, "warning")
 
     def test_font_size_change_repaints(self) -> None:
         before = self.app.settings.font_size
@@ -925,16 +952,47 @@ class TestModelToggle(EnginePatchMixin, unittest.TestCase):
         self.assertEqual(app.model_switch.get(), "unload")
         self.assertFalse(app.model_loaded)
         self.assertEqual(app.settings.engine, "demo")
-        self.assertTrue(MESSAGEBOX_CALLS and MESSAGEBOX_CALLS[-1][0] == "showwarning")
+        self.assertEqual(popup_texts(app), [INSTALL_HINT])
 
     def test_declined_download_leaves_the_engine_alone(self) -> None:
         app = self.app
         self.fake_status(present=False)
-        stub_gui.DIALOG_ANSWERS["askyesno"] = False
+        answer_popups("No")
         app.model_switch.choose("load")
         self.assertEqual(app.model_switch.get(), "unload")
         self.assertEqual(app.settings.engine, "demo")
         self.assertIn("cancelled", app.status_label.cget("text"))
+
+    def test_accepted_download_starts_the_load(self) -> None:
+        app = self.app
+        backend = StubLoadableBackend()
+        self.use_backend(backend)
+        app.settings.engine = "model"
+        self.fake_status(present=False)
+        answer_popups("Yes")
+        app.model_switch.choose("load")
+        self.assertTrue(backend.loaded)
+        self.assertEqual(app.model_switch.get(), "load")
+        self.assertEqual(app.settings.engine, "model")
+
+    def test_the_download_question_is_a_themed_yes_no_box(self) -> None:
+        app = self.app
+        self.fake_status(present=False)
+        asked: list[Any] = []
+
+        def decline(dialog: Any) -> None:
+            asked.append(dialog)
+            dialog.button("No").invoke()
+
+        stub_gui.WAIT_HOOK = decline
+        app.load_model()  # noqa: SLF001 - Run -> Load model
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(asked[0].button_labels, ("Yes", "No"))
+        self.assertEqual(asked[0].icon, "warning")
+        self.assertIn("1.5 GB", asked[0].message_text())
+        # the primary answer keeps the theme's accent face, the decline is ghosted
+        self.assertIsNone(asked[0].primary_button.options.get("fg_color"))
+        self.assertEqual(asked[0].button("No").options.get("fg_color"), "transparent")
 
     def test_unload_without_a_loaded_model_does_nothing(self) -> None:
         self.app.model_switch.choose("unload")
@@ -1101,6 +1159,61 @@ class TestThemedPopups(unittest.TestCase):
         self.assertEqual(MESSAGEBOX_CALLS, [])
         self.assertIsInstance(self.app.about_dialog, MessageDialog)
 
+    def test_every_popup_kind_has_a_badge_and_a_fill(self) -> None:
+        for kind in ("info", "warning", "error"):
+            dialog = self.app.show_popup(f"a {kind} message", kind=kind)
+            self.assertEqual(dialog.icon, kind)
+            self.assertEqual(dialog.icon_canvas.cget("bg"), theme.dialog_bg()[1])
+            self.assertGreater(dialog.icon_canvas.item_count(), 0, kind)
+        self.assertEqual(len(self.app.message_popups), 3)
+
+    def test_repeating_a_popup_refocuses_it_instead_of_stacking(self) -> None:
+        # A native box blocked, so it could not pile up; these do not either.
+        self.app.show_popup("opf is not installed", kind="warning")
+        first = open_popups(self.app)[0]
+        self.app.show_popup("opf is not installed", kind="warning")
+        self.assertEqual(len(self.app.message_popups), 1)
+        self.assertIs(open_popups(self.app)[0], first)
+        first.close()
+        self.assertEqual(self.app.message_popups, {})
+        self.app.show_popup("opf is not installed", kind="warning")
+        self.assertEqual(len(self.app.message_popups), 1)
+
+    def test_an_unreadable_file_comes_up_as_an_error_popup(self) -> None:
+        self.app._load_paths([Path("/definitely/not/here.txt")])  # noqa: SLF001
+        self.assertEqual(MESSAGEBOX_CALLS, [])
+        dialog = open_popups(self.app)[0]
+        self.assertEqual(dialog.icon, "error")
+        self.assertIn("Could not read file", dialog.message_text())
+
+    def test_the_upstream_links_come_up_themed(self) -> None:
+        self.app._open_upstream()  # noqa: SLF001 - Help -> Upstream repository
+        self.assertEqual(MESSAGEBOX_CALLS, [])
+        dialog = open_popups(self.app)[0]
+        self.assertEqual(dialog.icon, "info")
+        self.assertIn("github.com/openai/privacy-filter", dialog.message_text())
+        self.assertIn("github.com/openai/privacy-filter", stub_gui.CLIPBOARD[-1])
+
+    def test_a_theme_switch_repaints_every_open_popup(self) -> None:
+        self.app.show_popup("one warning", kind="warning")
+        self.app.show_popup("one error", kind="error")
+        dark = theme.dialog_bg()[1]
+        light = theme.dialog_bg()[0]
+        for dialog in open_popups(self.app):
+            self.assertEqual(dialog.icon_canvas.cget("bg"), dark)
+        self.app.theme_switch.choose("light")
+        for dialog in open_popups(self.app):
+            self.assertEqual(dialog.icon_canvas.cget("bg"), light)
+
+    def test_the_app_uses_no_native_message_box_anywhere(self) -> None:
+        # Tk draws its own boxes and keeps their platform grey in dark mode, so
+        # every popup in this app goes through MessageDialog instead.
+        from opf_gui import app as app_module
+
+        source = Path(app_module.__file__).read_text(encoding="utf-8")
+        for call in ("messagebox.show", "messagebox.ask", "import messagebox"):
+            self.assertNotIn(call, source)
+
     def test_the_message_sits_on_the_popup_fill_in_dark_mode(self) -> None:
         # Under the stubs there is no live theme, so these are the hex/name
         # fallbacks - which is also how the pair is ordered: (light, dark).
@@ -1126,10 +1239,10 @@ class TestThemedPopups(unittest.TestCase):
 
     def test_the_ok_button_is_a_widget_customtkinter_themes(self) -> None:
         self.app.show_about()  # noqa: SLF001
-        button = self.app.about_dialog.ok_button
+        button = self.app.about_dialog.primary_button
         self.assertEqual(button.cget("text"), "OK")
-        # No ghost override: it keeps the theme's own accent face.
-        self.assertNotEqual(button.options.get("fg_color"), "transparent")
+        # No colour override at all: it keeps the theme's own accent face.
+        self.assertIsNone(button.options.get("fg_color"))
 
     def test_the_icon_is_drawn_on_that_fill_not_borrowed_as_a_plate(self) -> None:
         self.app.show_about()  # noqa: SLF001
@@ -1165,8 +1278,10 @@ class TestThemedPopups(unittest.TestCase):
         first = self.app.about_dialog
         self.app.show_about()  # noqa: SLF001 - F1 again must not stack a second copy
         self.assertIs(self.app.about_dialog, first)
-        self.app.about_dialog.ok_button.invoke()
+        self.assertIs(self.app.open_popup(ABOUT_POPUP), first)
+        self.app.about_dialog.primary_button.invoke()
         self.assertIsNone(self.app.about_dialog)
+        self.assertIsNone(self.app.open_popup(ABOUT_POPUP))
         self.app.show_about()  # noqa: SLF001
         self.assertIsNot(self.app.about_dialog, first)
 

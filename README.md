@@ -123,6 +123,18 @@ across lines instead of being cut off at the edge.
 | `F1` | About |
 | `Ctrl+Q` | Quit |
 
+### Popups
+
+Every popup - `F1` About, the missing-engine and unreadable-file warnings, the
+export/save confirmations, and the one-time 1.5 GB download question - is drawn by the
+app (`widgets.MessageDialog`) rather than by Tk, so the icon plate, the message and the
+buttons follow the `dark`/`light` theme and the active colour theme instead of staying
+Tk's platform grey. The accent button is the answer and `Enter` presses it; a second
+button such as `No` is ghosted, and `Esc` (or the window's own close) dismisses without
+answering, which a question reads as *no*. Popup text that has not changed is
+re-focused rather than opened a second time, so a repeatedly clicked control cannot
+pile up copies.
+
 ### Demo mode
 
 Without `opf` installed the app uses a regex heuristic engine so the UI is still
