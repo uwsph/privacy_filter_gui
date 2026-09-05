@@ -126,8 +126,8 @@ class PrivacyFilterApp(ctk.CTk):
     def _build_fonts(self) -> None:
         size = int(self.settings.font_size)
         self.ui_font = ctk.CTkFont(size=size)
-        self.title_font = ctk.CTkFont(size=size + 2, weight="bold")
-        self.small_font = ctk.CTkFont(size=max(11, size - 2))
+        self.title_font = ctk.CTkFont(size=size + 1, weight="bold")
+        self.small_font = ctk.CTkFont(size=max(11, size - 1))
         self.tk_ui_font = theme.ui_font(size)
         self.tk_mono_font = theme.mono_font(size)
 
