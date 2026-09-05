@@ -129,7 +129,7 @@ class PrivacyFilterApp(ctk.CTk):
         self.title_font = ctk.CTkFont(size=size + 1, weight="bold")
         self.small_font = ctk.CTkFont(size=max(11, size - 1))
         self.tk_ui_font = theme.ui_font(size)
-        self.tk_mono_font = theme.mono_font(size - 3)
+        self.tk_mono_font = theme.mono_font(size - 4)
 
     def _build_menu(self) -> None:
         bar = tk.Menu(self, tearoff=False)
@@ -474,7 +474,7 @@ class PrivacyFilterApp(ctk.CTk):
         sidebar = ctk.CTkScrollableFrame(body, label_text="Detection summary")
         sidebar.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
         sidebar.grid_columnconfigure(0, weight=1)
-        self.legend = Legend(sidebar, font=self.tk_ui_font)
+        self.legend = Legend(sidebar, font=self.small_font)
         self.legend.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 8))
         self.summary_label = ctk.CTkLabel(
             sidebar, text="No result yet.", font=self.small_font, anchor="w", justify="left",
