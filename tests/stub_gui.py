@@ -42,6 +42,7 @@ class Widget:
         self.children: list[Any] = []
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.grid_info_now: dict[str, str] = {}
+        self._destroyed = False
         self._bindings: dict[str, Callable[..., Any]] = {}
         self._row_config: dict[int, dict[str, Any]] = {}
         self._col_config: dict[int, dict[str, Any]] = {}
@@ -135,10 +136,34 @@ class Widget:
         return list(self.children)
 
     def winfo_exists(self) -> bool:
-        return True
+        return not self._destroyed
 
     def winfo_width(self) -> int:
         return int(self.options.get("width", 800))
+
+    def winfo_height(self) -> int:
+        return int(self.options.get("height", 600))
+
+    def winfo_reqwidth(self) -> int:
+        return int(self.options.get("width", 360))
+
+    def winfo_reqheight(self) -> int:
+        return int(self.options.get("height", 160))
+
+    def winfo_rootx(self) -> int:
+        return 0
+
+    def winfo_rooty(self) -> int:
+        return 0
+
+    def lift(self, *_args: Any, **_kwargs: Any) -> None:
+        self._record("lift", {})
+
+    def lower(self, *_args: Any, **_kwargs: Any) -> None:
+        self._record("lower", {})
+
+    def resizable(self, *_args: Any, **_kwargs: Any) -> None:
+        self._record("resizable", {})
 
     def winfo_toplevel(self) -> Any:
         node = self
@@ -160,6 +185,7 @@ class Widget:
 
     def destroy(self) -> None:
         self._record("destroy", {})
+        self._destroyed = True
         children = getattr(self.master, "children", None)
         if isinstance(children, list) and self in children:
             children.remove(self)
@@ -565,6 +591,46 @@ class Menu(Widget):
         self.entries.append(("separator", kwargs))
 
 
+class Canvas(Widget):
+    """Working mini-Canvas: keeps the items drawn on it, in draw order."""
+
+    def __init__(self, master: Any = None, **kwargs: Any) -> None:
+        super().__init__(master, **kwargs)
+        self.items: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def _add(self, kind: str, coords: tuple[Any, ...], kwargs: dict[str, Any]) -> int:
+        self.items.append((kind, tuple(coords), dict(kwargs)))
+        return len(self.items)
+
+    def create_oval(self, *coords: Any, **kwargs: Any) -> int:
+        return self._add("oval", coords, kwargs)
+
+    def create_rectangle(self, *coords: Any, **kwargs: Any) -> int:
+        return self._add("rectangle", coords, kwargs)
+
+    def create_polygon(self, *coords: Any, **kwargs: Any) -> int:
+        return self._add("polygon", coords, kwargs)
+
+    def create_line(self, *coords: Any, **kwargs: Any) -> int:
+        return self._add("line", coords, kwargs)
+
+    def create_text(self, *coords: Any, **kwargs: Any) -> int:
+        return self._add("text", coords, kwargs)
+
+    def delete(self, *names: Any) -> None:
+        self._record("delete", {"items": names})
+        if "all" in names:
+            self.items = []
+
+    def item_count(self, kind: str | None = None) -> int:
+        """Test helper: how many items (optionally of one kind) are on the canvas."""
+        return len([item for item in self.items if kind is None or item[0] == kind])
+
+    def items_of(self, kind: str) -> list[dict[str, Any]]:
+        """Test helper: the options of every item of one kind."""
+        return [options for item_kind, _coords, options in self.items if item_kind == kind]
+
+
 # --------------------------------------------------------------------------- #
 # customtkinter
 # --------------------------------------------------------------------------- #
@@ -759,7 +825,7 @@ def _build_tkinter() -> types.ModuleType:
         "Text": Text, "Menu": Menu, "StringVar": StringVar, "BooleanVar": BooleanVar,
         "IntVar": IntVar, "DoubleVar": DoubleVar, "Variable": Variable,
         "Event": SimpleNamespace, "Toplevel": type("Toplevel", (Widget,), {}),
-        "Tk": type("Tk", (Widget,), {}), "Canvas": type("Canvas", (Widget,), {}),
+        "Tk": type("Tk", (Widget,), {}), "Canvas": Canvas,
         "Label": CTkLabel, "Scrollbar": type("Scrollbar", (Widget,), {}),
         "BaseWidget": Widget,
     }.items():

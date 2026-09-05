@@ -69,6 +69,183 @@ class TabDeck(ctk.CTkFrame):
         self._current = name
 
 
+def _appearance_mode() -> str:
+    """``dark``/``light`` from customtkinter's own ``Dark``/``Light`` report."""
+    return "light" if "light" in str(ctk.get_appearance_mode()).lower() else "dark"
+
+
+class MessageDialog(ctk.CTkToplevel):
+    """A theme-aware stand-in for ``tkinter.messagebox``.
+
+    A native Tk message box is drawn by Tk, not by customtkinter, so it keeps Tk's
+    own platform grey whatever appearance mode the app is in: Help -> About used to
+    show a light grey icon plate, message area and OK button inside a charcoal
+    window. This popup is a ``CTkToplevel`` carrying customtkinter widgets, so the
+    window, the text and the button all follow the live theme, and the canvas the
+    icon is drawn on is painted the window's own fill - read from the live theme,
+    not hard-coded - so nothing reads as a foreign grey plate.
+    """
+
+    ICON_SIZE = 44
+    #: The message wraps inside this band: compact for a one-liner, column-like
+    #: for a paragraph (an unwrapped 250-char line would be wider than the screen).
+    WRAP_MIN = 260
+    WRAP_MAX = 460
+
+    def __init__(
+        self,
+        master: Any,
+        *,
+        title: str,
+        message: str,
+        icon: str = "info",
+        ok_text: str = "OK",
+        on_ok: Callable[[], None] | None = None,
+        on_close: Callable[[], None] | None = None,
+        font: Any = None,
+        title_font: Any = None,
+    ) -> None:
+        super().__init__(master)
+        self.master_app = master
+        self._icon = icon
+        self._message = str(message)
+        self._on_ok = on_ok
+        self._on_close = on_close
+        self._font = font if font is not None else theme.ui_font(12)
+        self._title_font = title_font if title_font is not None else theme.ui_font(13, "bold")
+        self._colors: dict[str, str] = {}
+
+        self.title(str(title))
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<Return>", self._on_enter)
+        self.bind("<KP_Enter>", self._on_enter)
+
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.grid(row=0, column=0, columnspan=2, sticky="ew", padx=18, pady=(18, 6))
+        head.grid_columnconfigure(1, weight=1)
+        self.icon_canvas = tk.Canvas(
+            head, width=self.ICON_SIZE, height=self.ICON_SIZE, highlightthickness=0, bd=0,
+        )
+        self.icon_canvas.grid(row=0, column=0, sticky="n")
+        self.title_label = ctk.CTkLabel(
+            head, text=str(title), font=self._title_font, anchor="w", justify="left",
+        )
+        self.title_label.grid(row=0, column=1, sticky="w", padx=(14, 0))
+
+        self.message_label = ctk.CTkLabel(
+            self, text=self._message, font=self._font, anchor="w", justify="left",
+            wraplength=self._wrap_width(),
+        )
+        self.message_label.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=20, pady=(2, 14))
+
+        self.ok_button = ctk.CTkButton(self, text=ok_text, width=104, height=30,
+                                       font=self._font, command=self.accept)
+        self.ok_button.grid(row=2, column=0, columnspan=2, pady=(0, 18))
+
+        self.apply_appearance(_appearance_mode())
+        self._center_on_master()
+        self.transient(master)
+        self.grab_set()
+        self.focus_force()
+
+    # ------------------------------------------------------------------ #
+    # behaviour
+    # ------------------------------------------------------------------ #
+    def message_text(self) -> str:
+        """The body the popup shows."""
+        return self._message
+
+    def accept(self) -> None:
+        """OK / Enter: run the callback, then dismiss."""
+        self.close()
+        if self._on_ok is not None:
+            self._on_ok()
+
+    def _on_escape(self, _event: Any) -> str:
+        self.close()
+        return "break"  # else the window-wide Escape (cancel job) fires as well
+
+    def _on_enter(self, _event: Any) -> str:
+        self.accept()
+        return "break"  # else the window-wide Enter (redact) fires as well
+
+    def close(self) -> None:
+        """Dismiss the popup - every way out (OK, Escape, the window's own X) lands here."""
+        try:
+            self.grab_release()
+        except Exception:  # noqa: BLE001 - no grab to release (already gone, no display)
+            pass
+        self.destroy()
+        if self._on_close is not None:
+            self._on_close()
+
+    # ------------------------------------------------------------------ #
+    # appearance
+    # ------------------------------------------------------------------ #
+    def apply_appearance(self, mode: str) -> None:
+        """Repaint the parts customtkinter cannot theme by itself (the icon)."""
+        self._colors = theme.dialog_palette("light" if mode == "light" else "dark", self._icon)
+        colors = self._colors
+        self.icon_canvas.configure(bg=colors["bg"])
+        self.title_label.configure(text_color=colors["fg"])
+        self.message_label.configure(text_color=colors["fg"])
+        self._draw_icon()
+
+    def _draw_icon(self) -> None:
+        """Draw the badge from canvas shapes - no image asset, no icon-font glyph.
+
+        Coordinates are authored for a 44 px plate and scaled by ``s``, so the
+        badge keeps its proportions if ``ICON_SIZE`` ever changes.
+        """
+        canvas = self.icon_canvas
+        badge = self._colors["accent"]
+        glyph = self._colors["glyph"]
+        s = self.ICON_SIZE / 44
+        canvas.delete("all")
+        if self._icon == "warning":
+            canvas.create_polygon(2 * s, 38 * s, 22 * s, 4 * s, 42 * s, 38 * s, fill=badge, outline="")
+            canvas.create_rectangle(19 * s, 16 * s, 25 * s, 29 * s, fill=glyph, outline="")
+            canvas.create_oval(19 * s, 31 * s, 25 * s, 37 * s, fill=glyph, outline="")
+            return
+        canvas.create_oval(2 * s, 2 * s, 42 * s, 42 * s, fill=badge, outline="")
+        if self._icon == "error":
+            canvas.create_line(15 * s, 15 * s, 29 * s, 29 * s, fill=glyph, width=5 * s, capstyle="round")
+            canvas.create_line(29 * s, 15 * s, 15 * s, 29 * s, fill=glyph, width=5 * s, capstyle="round")
+            return
+        canvas.create_oval(19 * s, 10 * s, 25 * s, 16 * s, fill=glyph, outline="")
+        canvas.create_rectangle(19 * s, 18 * s, 25 * s, 34 * s, fill=glyph, outline="")
+
+    def _wrap_width(self) -> int:
+        """Pixels the message may use before it wraps, from its longest line."""
+        longest = max((len(line) for line in self._message.splitlines()), default=0)
+        try:
+            import tkinter.font as tkfont  # local import keeps this module importable headless
+
+            measured = tkfont.Font(font=self._font).measure("n" * max(longest, 1))
+            width = int(measured) if measured else 0
+        except Exception:  # noqa: BLE001 - stubbed font, or a font Tk cannot resolve
+            width = 0
+        if not width:
+            width = (longest + 1) * 8
+        return max(self.WRAP_MIN, min(self.WRAP_MAX, width + 12))
+
+    def _center_on_master(self) -> None:
+        """Sit over the middle of the window that opened the popup, like a native box."""
+        try:
+            self.update_idletasks()
+            width = int(self.winfo_reqwidth())
+            height = int(self.winfo_reqheight())
+            left = int(self.master_app.winfo_rootx())
+            top = int(self.master_app.winfo_rooty())
+            wide = int(self.master_app.winfo_width())
+            high = int(self.master_app.winfo_height())
+            self.geometry(f"+{max(0, left + (wide - width) // 2)}+{max(0, top + (high - height) // 3)}")
+        except Exception:  # noqa: BLE001 - no geometry to read (stubbed Tk, odd window managers)
+            pass
+
+
 class TextPane(tk.Frame):
     """Scrollable text editor/viewer with per-PII-label colour tags."""
 

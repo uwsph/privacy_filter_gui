@@ -24,7 +24,7 @@ from .engine import (
     EngineController,
 )
 from .models import DECODE_MODES, Outcome, Settings, config_path, display_name
-from .widgets import Legend, LogConsole, SpanTable, TabDeck, TextPane
+from .widgets import Legend, LogConsole, MessageDialog, SpanTable, TabDeck, TextPane
 
 APP_TITLE = "Open Privacy Filter GUI"
 VIEWS = ("Output", "Review", "JSON", "Batch", "Log")
@@ -66,6 +66,9 @@ class PrivacyFilterApp(ctk.CTk):
         #: A model inference pass has run since the backend was built. Drives the
         #: "Warm up model" button: solid while cold, ghosted once warm.
         self.model_warm = False
+        #: The Help -> About popup, while it is open. Held so F1 cannot stack a
+        #: second copy of it and so a theme switch can repaint it.
+        self.about_dialog: MessageDialog | None = None
 
         try:
             ctk.set_default_color_theme(self.settings.color_theme)
@@ -526,12 +529,23 @@ class PrivacyFilterApp(ctk.CTk):
         for box in (self.json_box, self.batch_box, self.log_box):
             box.configure(fg_color=colors["bg"], text_color=colors["fg"])
         self.console.apply_appearance(mode)
+        self._repaint_open_dialogs(mode)
 
         # Apply theme colors to the menu bar
         self._apply_menu_theme()
         self._style_warmup_button()  # keeps the warm/cold face on the current palette
         self._style_clear_button()  # ditto for the availability of Clear ...
         self._style_copy_log_button()  # ... and of Copy log
+
+    def _repaint_open_dialogs(self, mode: str) -> None:
+        """Re-theme the popups this window owns that outlived the theme switch."""
+        dialog = self.about_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.apply_appearance(mode)
+        except tk.TclError:  # pragma: no cover - closed between the switch and the repaint
+            self.about_dialog = None
 
     def change_font_size(self, delta: int) -> None:
         size = max(8, min(24, int(self.settings.font_size) + delta))
@@ -1298,23 +1312,38 @@ class PrivacyFilterApp(ctk.CTk):
         messagebox.showinfo(APP_TITLE, message + "\n\n(repo link copied to clipboard)", parent=self)
 
     def show_about(self) -> None:
+        """Help -> About (and F1): a themed popup, not Tk's grey native message box."""
         documents = len(self.batch_outcomes) + (1 if self.last_outcome else 0)
         spans = sum(item.span_count for item in self.batch_outcomes)
         if self.last_outcome is not None:
             spans += self.last_outcome.span_count
-        messagebox.showinfo(
-            APP_TITLE,
-            f"{APP_TITLE} v{__version__}\n\n"
-            "Desktop front-end for the open-weight 1.5B MoE PII redaction model "
-            "(Apache 2.0) from OpenAI. Inference runs locally on your machine; text "
-            "never leaves the device. The only network access is the one-time "
-            "checkpoint download from HuggingFace.\n\n"
-            f"Session documents: {documents}\n"
-            f"Session PII spans: {spans}\n"
-            f"Config file: {config_path()}\n\n"
-            "This GUI is licensed under the Apache License 2.0.\n"
-            "Demo engine = regex heuristics for interface previews only.",
-            parent=self,
+        existing = self.about_dialog
+        if existing is not None:
+            try:
+                existing.lift()
+                existing.focus_set()
+                return
+            except tk.TclError:
+                self.about_dialog = None  # closed since it was opened
+        self.about_dialog = MessageDialog(
+            self,
+            title=APP_TITLE,
+            icon="info",
+            on_close=lambda: setattr(self, "about_dialog", None),
+            font=self.tk_ui_font,
+            title_font=theme.ui_font(int(self.settings.font_size) + 1, "bold"),
+            message=(
+                f"{APP_TITLE} v{__version__}\n\n"
+                "Desktop front-end for the open-weight 1.5B MoE PII redaction model "
+                "(Apache 2.0) from OpenAI. Inference runs locally on your machine; text "
+                "never leaves the device. The only network access is the one-time "
+                "checkpoint download from HuggingFace.\n\n"
+                f"Session documents: {documents}\n"
+                f"Session PII spans: {spans}\n"
+                f"Config file: {config_path()}\n\n"
+                "This GUI is licensed under the Apache License 2.0.\n"
+                "Demo engine = regex heuristics for interface previews only."
+            ),
         )
 
     def _on_close(self) -> None:

@@ -21,7 +21,7 @@ stub_gui.install()
 from opf_gui import __version__, dnd, formatting, theme  # noqa: E402
 from opf_gui.app import ACCEPTED_BATCH, APP_TITLE, VIEWS, PrivacyFilterApp  # noqa: E402
 from opf_gui.models import Outcome, Settings, Span  # noqa: E402
-from opf_gui.widgets import span_tag  # noqa: E402
+from opf_gui.widgets import MessageDialog, span_tag  # noqa: E402
 
 SAMPLE = (
     "Alice Smith (alice.smith@example.com, +1 415 555 0132) filed ticket 4111 1111 1111 1111 "
@@ -1080,18 +1080,102 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertEqual(app.settings.to_dict(), before)
 
 
+class TestThemedPopups(unittest.TestCase):
+    """Help -> About is a customtkinter popup. Tk's own message box keeps its
+    platform grey whatever the appearance mode is, so its icon plate, message area
+    and OK button sat light grey inside a dark window."""
+
+    def setUp(self) -> None:
+        self.app = make_app()
+
+    def test_about_names_the_version(self) -> None:
+        self.app.show_about()  # noqa: SLF001 - Help -> About OPF GUI, and F1
+        dialog = self.app.about_dialog
+        self.assertEqual(dialog.title(), APP_TITLE)
+        self.assertTrue(
+            dialog.message_text().startswith(f"{APP_TITLE} v{__version__}"), dialog.message_text()
+        )
+
+    def test_about_opens_no_native_message_box(self) -> None:
+        self.app.show_about()  # noqa: SLF001
+        self.assertEqual(MESSAGEBOX_CALLS, [])
+        self.assertIsInstance(self.app.about_dialog, MessageDialog)
+
+    def test_the_message_sits_on_the_popup_fill_in_dark_mode(self) -> None:
+        # Under the stubs there is no live theme, so these are the hex/name
+        # fallbacks - which is also how the pair is ordered: (light, dark).
+        self.app.show_about()  # noqa: SLF001
+        dialog = self.app.about_dialog
+        light_fill, dark_fill = theme.dialog_bg()
+        self.assertEqual(dialog.icon_canvas.cget("bg"), dark_fill)
+        self.assertNotEqual(dialog.icon_canvas.cget("bg"), light_fill)
+        self.assertEqual(dialog.message_label.cget("text_color"), theme.dialog_fg()[1])
+        self.assertEqual(dialog.title_label.cget("text_color"), theme.dialog_fg()[1])
+
+    def test_theme_switch_repaints_an_open_popup(self) -> None:
+        self.app.show_about()  # noqa: SLF001 - the popup is open across the switch
+        canvas = self.app.about_dialog.icon_canvas
+        dark_fill = canvas.cget("bg")
+        self.app.theme_switch.choose("light")
+        light_fill, dark_fill_again = theme.dialog_bg()
+        self.assertEqual(canvas.cget("bg"), light_fill)
+        self.assertEqual(self.app.about_dialog.message_label.cget("text_color"), theme.dialog_fg()[0])
+        self.app.theme_switch.choose("dark")
+        self.assertEqual(canvas.cget("bg"), dark_fill_again)
+        self.assertNotEqual(dark_fill, light_fill)
+
+    def test_the_ok_button_is_a_widget_customtkinter_themes(self) -> None:
+        self.app.show_about()  # noqa: SLF001
+        button = self.app.about_dialog.ok_button
+        self.assertEqual(button.cget("text"), "OK")
+        # No ghost override: it keeps the theme's own accent face.
+        self.assertNotEqual(button.options.get("fg_color"), "transparent")
+
+    def test_the_icon_is_drawn_on_that_fill_not_borrowed_as_a_plate(self) -> None:
+        self.app.show_about()  # noqa: SLF001
+        canvas = self.app.about_dialog.icon_canvas
+        # info badge: one disc, then the glyph punched out of it
+        self.assertEqual(canvas.item_count("oval"), 2)
+        self.assertEqual(canvas.item_count("rectangle"), 1)
+        badge = canvas.items_of("oval")[0]
+        self.assertEqual(badge["fill"], theme.dialog_palette("dark", "info")["accent"])
+        self.assertNotEqual(badge["fill"], canvas.cget("bg"))
+
+    def test_an_error_popup_uses_the_error_badge(self) -> None:
+        dialog = MessageDialog(self.app, title="Broken", message="It broke", icon="error")
+        badge = dialog.icon_canvas.items_of("oval")[0]
+        self.assertEqual(badge["fill"], theme.dialog_palette("dark", "error")["accent"])
+        self.assertEqual(dialog.icon_canvas.item_count("line"), 2)
+
+    def test_its_shortcuts_do_not_also_fire_the_window_wide_ones(self) -> None:
+        # Escape and Enter are app shortcuts too (cancel job, redact). The popup
+        # claims them, so dismissing it must not also run them behind the popup.
+        self.app.show_about()  # noqa: SLF001
+        dialog = self.app.about_dialog
+        self.assertEqual(dialog._on_enter(SimpleNamespace()), "break")  # noqa: SLF001
+        self.assertIsNone(self.app.about_dialog)
+        self.assertIsNone(self.app.last_outcome)  # no redaction ran
+        self.app.show_about()  # noqa: SLF001
+        self.assertEqual(self.app.about_dialog._on_escape(SimpleNamespace()), "break")  # noqa: SLF001
+        self.assertIsNone(self.app.about_dialog)
+        self.assertNotEqual(self.app.status_label.cget("text"), "Nothing running")
+
+    def test_ok_dismisses_the_popup_and_the_next_f1_opens_a_fresh_one(self) -> None:
+        self.app.show_about()  # noqa: SLF001
+        first = self.app.about_dialog
+        self.app.show_about()  # noqa: SLF001 - F1 again must not stack a second copy
+        self.assertIs(self.app.about_dialog, first)
+        self.app.about_dialog.ok_button.invoke()
+        self.assertIsNone(self.app.about_dialog)
+        self.app.show_about()  # noqa: SLF001
+        self.assertIsNot(self.app.about_dialog, first)
+
+
 class TestAppLifecycle(unittest.TestCase):
     def test_close_saves_and_shuts_down(self) -> None:
         app = make_app()
         app._on_close()  # noqa: SLF001
         self.assertTrue(app._quitting)  # noqa: SLF001
-
-    def test_about_names_the_version(self) -> None:
-        app = make_app()
-        app.show_about()  # noqa: SLF001 - Help -> About OPF GUI, and F1
-        title, body = MESSAGEBOX_CALLS[-1][1][:2]
-        self.assertEqual(title, APP_TITLE)
-        self.assertTrue(body.startswith(f"{APP_TITLE} v{__version__}"), body)
 
     def test_menu_has_expected_commands(self) -> None:
         app = make_app()

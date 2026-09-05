@@ -19,7 +19,7 @@ opf_gui/
   models.py       settings, spans, label metadata
   prompt.md       Original prompt used with unsloth/Qwen3.8-Flash-Next-GGUF:UD-Q4_K_XL
   theme.py        PII colour palettes, light/dark colours, ghost buttons
-  widgets.py      highlighted text panes, span table, legend, log console
+  widgets.py      highlighted text panes, span table, legend, log console, themed popups
 ```
 
 ## Install
@@ -119,7 +119,7 @@ across lines instead of being cut off at the edge.
 | `Ctrl+O` / `Ctrl+S` | Open file / save redacted text |
 | `Ctrl+Shift+C` | Copy redacted text |
 | `Ctrl++` / `Ctrl+-` | Font size |
-| `Esc` | Cancel running job |
+| `Esc` | Cancel running job, or close the About popup |
 | `F1` | About |
 | `Ctrl+Q` | Quit |
 

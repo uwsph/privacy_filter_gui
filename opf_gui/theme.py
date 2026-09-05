@@ -129,15 +129,77 @@ def nested_panel_bg() -> tuple[str, str]:
     bare panel - read the value instead of hard-coding it so both editors match in
     either appearance mode and under any colour theme.
     """
+    return theme_colors("CTkFrame", "top_fg_color", NESTED_PANEL_BG)
+
+
+#: The fill customtkinter gives a dialog window (``CTkToplevel.fg_color``) and the
+#: text it paints on top (``CTkLabel.text_color``). Plain ``tkinter`` widgets - the
+#: canvas an About-box icon is drawn on - have no theme of their own and are painted
+#: from these values, otherwise they keep Tk's platform grey in both appearance
+#: modes. The fallback pair is the ``blue`` theme's own tokens.
+DIALOG_BG: tuple[str, str] = ("gray92", "gray14")
+DIALOG_FG: tuple[str, str] = ("gray10", "#DCE4EE")
+
+#: Icon badge per message kind, ``(light, dark)``. ``info`` follows the button
+#: accent so the badge and the popup's OK button are the same colour in every
+#: theme; warning and error stay recognisable at a glance on both dialog fills.
+DIALOG_ICON_BG: dict[str, tuple[str, str]] = {
+    "info": ("#3B8ED0", "#1F6AA5"),
+    "warning": ("#A16207", "#D99A2B"),
+    "error": ("#B42318", "#E5636A"),
+}
+#: The glyph punched out of the badge (``i`` / ``!`` / cross).
+DIALOG_ICON_FG: tuple[str, str] = ("#F7FAFD", "#F2F5FA")
+
+
+def theme_colors(section: str, option: str, fallback: tuple[str, str]) -> tuple[str, str]:
+    """One ``(light, dark)`` colour pair read out of the live customtkinter theme.
+
+    Falls back to the given pair whenever the theme cannot be read - stubbed
+    customtkinter in the headless tests, or a relocated private module.
+    """
     try:
         from customtkinter.windows.widgets.theme.theme_manager import ThemeManager  # noqa: PLC0415
 
-        value = ThemeManager.theme["CTkFrame"]["top_fg_color"]
+        value = ThemeManager.theme[section][option]
     except Exception:  # noqa: BLE001 - stubbed or relocated internals
-        return NESTED_PANEL_BG
+        return fallback
     if isinstance(value, str):
         return (value, value)
-    return (value[0], value[1])
+    try:
+        return (str(value[0]), str(value[1]))
+    except (TypeError, IndexError):
+        return fallback
+
+
+def dialog_bg() -> tuple[str, str]:
+    """ ``(light, dark)`` fill of a dialog window (a ``CTkToplevel``)."""
+    return theme_colors("CTkToplevel", "fg_color", DIALOG_BG)
+
+
+def dialog_fg() -> tuple[str, str]:
+    """ ``(light, dark)`` text colour on a dialog window."""
+    return theme_colors("CTkLabel", "text_color", DIALOG_FG)
+
+
+def button_accent() -> tuple[str, str]:
+    """ ``(light, dark)`` face of an active ``CTkButton`` in the live theme."""
+    return theme_colors("CTkButton", "fg_color", tuple(ACTIVE_BUTTON["fg_color"]))
+
+
+def dialog_palette(mode: str, icon: str = "info") -> dict[str, str]:
+    """Colours a themed message popup paints itself: window fill, text, badge, glyph.
+
+    Everything a customtkinter widget can theme itself is left to customtkinter;
+    this palette is for the parts that cannot (the icon canvas).
+    """
+    index = 0 if mode == "light" else 1
+    return {
+        "bg": dialog_bg()[index],
+        "fg": dialog_fg()[index],
+        "accent": DIALOG_ICON_BG.get(icon, button_accent())[index],
+        "glyph": DIALOG_ICON_FG[index],
+    }
 
 
 def resolve_mode(appearance: str, actual: str = "dark") -> str:
