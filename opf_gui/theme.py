@@ -19,7 +19,7 @@ SPAN_BG: dict[str, tuple[str, str]] = {
     "private_url": ("#175f8a", "#d3f0ff"),
     "account_number": ("#7a5c00", "#fff0b8"),
     "secret": ("#9c2b2b", "#ffd3d3"),
-    REDACTED_LABEL: ("#4a4a55", "#dcdce2"),
+    REDACTED_LABEL: ("#6a6a65", "#dcdce2"),
 }
 
 # (dark-mode foreground, light-mode foreground)
@@ -49,7 +49,7 @@ SPAN_ACCENT: dict[str, tuple[str, str]] = {
     "private_url": ("#175f8a", "#11507a"),
     "account_number": ("#7a5c00", "#6a4f00"),
     "secret": ("#9c2b2b", "#8d2020"),
-    REDACTED_LABEL: ("#4a4a55", "#45454f"),
+    REDACTED_LABEL: ("#8a8a85", "#45454f"),
 }
 
 FALLBACK_LABEL = "other"
