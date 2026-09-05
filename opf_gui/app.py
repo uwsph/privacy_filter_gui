@@ -129,7 +129,7 @@ class PrivacyFilterApp(ctk.CTk):
         self.title_font = ctk.CTkFont(size=size + 1, weight="bold")
         self.small_font = ctk.CTkFont(size=max(11, size - 1))
         self.tk_ui_font = theme.ui_font(size)
-        self.tk_mono_font = theme.mono_font(size - 2)
+        self.tk_mono_font = theme.mono_font(size - 1)
 
     def _build_menu(self) -> None:
         bar = tk.Menu(self, tearoff=False)
