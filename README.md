@@ -2,6 +2,8 @@
 
 A local, offline desktop app for the [`openai/privacy-filter`](https://github.com/openai/privacy-filter) (`opf`). Paste or drop in text, review detected PII spans, and export redacted text or schema-shaped JSON. Built with Python and [customtkinter](https://github.com/TomSchimansky/CustomTkinter)—all processing happens locally, and no data leaves your machine.
 
+![Open Privacy Filter GUI Screenshot](privacy_filter_gui_screenshot.png)
+
 ## Features
 
 * **Redact & Review:** Process text and immediately review every tagged span (label, text, offsets, score) in a sortable table. Click a span to highlight it in the text pane.
