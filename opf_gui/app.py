@@ -132,52 +132,159 @@ class PrivacyFilterApp(ctk.CTk):
         self.tk_mono_font = theme.mono_font(size - 1)
 
     def _build_menu(self) -> None:
+        """Build the menu bar.
+
+        macOS and Linux honour Tk menu colours, so a native ``tk.Menu`` is
+        used there.  Windows renders its menu bar with the OS light visual
+        style and *ignores* every Tk style option (which is why it used to
+        sit white-on-black in dark mode), so Windows gets an in-window bar
+        of themed CTk widgets instead; those follow dark/light switches
+        automatically.
+        """
+        spec = (
+            (
+                "File",
+                [
+                    ("Open input file...", self.open_file, "Ctrl+O"),
+                    ("Add to batch list...", self.add_batch_files, ""),
+                    None,
+                    ("Save redacted text...", self.save_redacted, "Ctrl+S"),
+                    ("Save JSON result...", self.save_json, ""),
+                    ("Export batch results...", self.export_batch, ""),
+                    None,
+                    ("Quit", self._on_close, "Ctrl+Q"),
+                ],
+            ),
+            (
+                "Run",
+                [
+                    ("Redact input", self.run_redact, "Ctrl+Return"),
+                    ("Load model", self.load_model, ""),
+                    ("Warm up model", self.warmup_model, ""),
+                    ("Unload model (free memory)", self.unload_model, ""),
+                    ("Cancel current job", self.cancel_job, "Esc"),
+                ],
+            ),
+            (
+                "Edit",
+                [
+                    ("Paste into input", self.paste_input, "Ctrl+V"),
+                    ("Insert sample text", self.load_sample, ""),
+                    ("Copy redacted text", self.copy_redacted, "Ctrl+Shift+C"),
+                    ("Clear everything", self.clear_all, ""),
+                ],
+            ),
+            (
+                "View",
+                [
+                    ("Increase font size", lambda: self.change_font_size(1), "Ctrl++"),
+                    ("Decrease font size", lambda: self.change_font_size(-1), "Ctrl+-"),
+                    None,
+                    ("Advanced settings...", self.open_settings, ""),
+                ],
+            ),
+            (
+                "Help",
+                [
+                    ("About OPF GUI", self.show_about, "F1"),
+                    ("Upstream repository", self._open_upstream, ""),
+                    ("Activity log", lambda: self.show_view("Log"), ""),
+                ],
+            ),
+        )
+        if sys.platform == "win32":
+            self._build_windows_menu(spec)
+        else:
+            self._build_native_menu(spec)
+
+    def _build_native_menu(self, spec) -> None:
+        """Native tk.Menu bar (macOS / Linux)."""
         bar = tk.Menu(self, tearoff=False)
-
-        file_menu = tk.Menu(bar, tearoff=False)
-        file_menu.add_command(label="Open input file...", command=self.open_file, accelerator="Ctrl+O")
-        file_menu.add_command(label="Add to batch list...", command=self.add_batch_files)
-        file_menu.add_separator()
-        file_menu.add_command(label="Save redacted text...", command=self.save_redacted, accelerator="Ctrl+S")
-        file_menu.add_command(label="Save JSON result...", command=self.save_json)
-        file_menu.add_command(label="Export batch results...", command=self.export_batch)
-        file_menu.add_separator()
-        file_menu.add_command(label="Quit", command=self._on_close, accelerator="Ctrl+Q")
-        bar.add_cascade(label="File", menu=file_menu)
-
-        run_menu = tk.Menu(bar, tearoff=False)
-        run_menu.add_command(label="Redact input", command=self.run_redact, accelerator="Ctrl+Return")
-        run_menu.add_command(label="Load model", command=self.load_model)
-        run_menu.add_command(label="Warm up model", command=self.warmup_model)
-        run_menu.add_command(label="Unload model (free memory)", command=self.unload_model)
-        run_menu.add_command(label="Cancel current job", command=self.cancel_job, accelerator="Esc")
-        bar.add_cascade(label="Run", menu=run_menu)
-
-        edit_menu = tk.Menu(bar, tearoff=False)
-        edit_menu.add_command(label="Paste into input", command=self.paste_input, accelerator="Ctrl+V")
-        edit_menu.add_command(label="Insert sample text", command=self.load_sample)
-        edit_menu.add_command(label="Copy redacted text", command=self.copy_redacted, accelerator="Ctrl+Shift+C")
-        edit_menu.add_command(label="Clear everything", command=self.clear_all)
-        bar.add_cascade(label="Edit", menu=edit_menu)
-
-        view_menu = tk.Menu(bar, tearoff=False)
-        view_menu.add_command(label="Increase font size", command=lambda: self.change_font_size(1), accelerator="Ctrl++")
-        view_menu.add_command(label="Decrease font size", command=lambda: self.change_font_size(-1), accelerator="Ctrl+-")
-        view_menu.add_separator()
-        view_menu.add_command(label="Advanced settings...", command=self.open_settings)
-        bar.add_cascade(label="View", menu=view_menu)
-
-        help_menu = tk.Menu(bar, tearoff=False)
-        help_menu.add_command(label="About OPF GUI", command=self.show_about, accelerator="F1")
-        help_menu.add_command(label="Upstream repository", command=self._open_upstream)
-        help_menu.add_command(label="Activity log", command=lambda: self.show_view("Log"))
-        bar.add_cascade(label="Help", menu=help_menu)
-
+        for title, items in spec:
+            menu = tk.Menu(bar, tearoff=False)
+            for item in items:
+                if item is None:
+                    menu.add_separator()
+                    continue
+                label, command, accel = item
+                if accel:
+                    menu.add_command(label=label, command=command, accelerator=accel)
+                else:
+                    menu.add_command(label=label, command=command)
+            bar.add_cascade(label=title, menu=menu)
         try:
             self.config(menu=bar)
         except tk.TclError:  # pragma: no cover - platform specific
             self.log("Native menu bar unavailable on this platform.", level="warn")
         self.menu_bar = bar
+
+    def _build_windows_menu(self, spec) -> None:
+        """Windows menu bar: themed row of CTk buttons + native popups.
+
+        The bar itself is drawn as CTk buttons (they follow the dark/light
+        switch on their own).  The dropdowns are native ``tk.Menu`` popups
+        opened with ``tk_popup`` anchored to the button - the same
+        mechanism customtkinter's own dropdowns use.  These are OS-drawn,
+        so they are always visible and always land where clicked; on the
+        Windows builds that honour the per-window DWM dark-mode flag (see
+        _apply_windows_native_theme) they pick up the dark theme too, and
+        otherwise they degrade to plain light OS menus rather than
+        blank boxes.
+        """
+        self.menu_bar = None  # no Tk menu bar (Windows ignores its colors)
+        self._win_native_menus: list[tk.Menu] = []
+        bar = ctk.CTkFrame(self, corner_radius=0, border_width=0)
+        bar.pack(side="top", fill="x")
+        for _title, items in spec:
+            native = tk.Menu(self, tearoff=False)
+            for item in items:
+                if item is None:
+                    native.add_separator()
+                    continue
+                label, command, accel = item
+                if accel:
+                    native.add_command(label=label, command=command, accelerator=accel)
+                else:
+                    native.add_command(label=label, command=command)
+            self._win_native_menus.append(native)
+            # text_color must be set explicitly: customtkinter's default button
+            # text is #DCE4EE in *both* appearance modes, so in light mode these
+            # bar buttons rendered near-invisible until the gray hover state
+            # appeared. The pair mirrors theme.GHOST_BUTTON (light, dark).
+            #
+            # Width: size each button to its text. customtkinter's default is a
+            # fixed 140 px, which leaves a two-letter title like "Run" as a
+            # stubby, over-wide block; "File"/"Edit"/"View"/"Help" all fit in
+            # roughly half of that.
+            label = f" {_title} "
+            width = None
+            try:
+                import tkinter.font as tkfont  # local import; app stays importable headless
+
+                width = (int(tkfont.Font(font=self.ui_font).measure(label)) + 16) or None
+            except Exception:  # noqa: BLE001 - stubbed Tk/font, odd builds
+                pass
+            button = ctk.CTkButton(
+                bar,
+                text=label,
+                width=width or len(label) * 8 + 16,
+                anchor="center",
+                height=28,
+                fg_color="transparent",
+                text_color=("#1b1b22", "#e8e8ee"),
+                hover_color="gray",
+            )
+            button.configure(command=lambda _b=button, m=native: self._open_win_menu(_b, m))
+            button.pack(side="left", padx=3, pady=2)
+
+    def _open_win_menu(self, button: ctk.CTkButton, native: tk.Menu) -> None:
+        """Show a native popup anchored under its bar button."""
+        x = button.winfo_rootx()
+        y = button.winfo_rooty() + button.winfo_height()
+        try:
+            native.tk_popup(x, y)
+        except tk.TclError:  # pragma: no cover - some Tk builds
+            native.post(x, y)
 
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, corner_radius=0, border_width=0)
@@ -228,6 +335,19 @@ class PrivacyFilterApp(ctk.CTk):
 
     def _apply_menu_theme(self) -> None:
         """Update native Tkinter menu bar colors to match the active theme."""
+        # Keep Windows' OS-drawn chrome (title bar, native popups) in step
+        # with the app; no-op on the other platforms.
+        self._apply_windows_native_theme(self._current_mode() == "dark")
+
+        if getattr(self, "menu_bar", None) is None and getattr(self, "_win_native_menus", None):
+            bg, fg = ("#2b2b2b", "#ffffff") if self._current_mode() == "dark" else ("#dbdbdb", "#000000")
+            for native in self._win_native_menus:
+                try:
+                    native.configure(bg=bg, fg=fg, bd=1)
+                except tk.TclError:  # pragma: no cover - platform specific
+                    pass
+            return
+
         if not getattr(self, "menu_bar", None):
             return
 
@@ -255,7 +375,7 @@ class PrivacyFilterApp(ctk.CTk):
             activeborderwidth=0,
         )
 
-        # Apply styling recursively to all submenus/dropdowns
+        # Apply styling recursively to all submenus/dropdowns (X11/macOS only)
         for child in self.menu_bar.winfo_children():
             if isinstance(child, tk.Menu):
                 child.configure(
@@ -267,6 +387,42 @@ class PrivacyFilterApp(ctk.CTk):
                     bd=1,
                     relief="flat",
                 )
+
+    def _apply_windows_native_theme(self, dark: bool) -> None:
+        """Make Windows render its OS-drawn chrome (title bar / popups) to match.
+
+        The bar row uses CTk widgets and the dropdowns are native ``tk.Menu``
+        popups (see _build_windows_menu); this only covers what Windows
+        still draws natively:
+        
+        * ``dwmapi.DwmSetWindowAttribute(hwnd, 20, ...)`` -
+          ``DWMWA_USE_IMMERSIVE_DARK_MODE``. Darkens the in-window menu bar,
+          its dropdown popups (Windows 11; Windows 10 with a v6 manifest,
+          which Python ships) and the title bar (Windows 10 2004+).
+        * ``uxtheme.SetWindowTheme(hwnd, "DarkMode"/"LightMode", 1)`` -
+          dark dropdown menus on Windows 10 1809+ as a fallback path.
+
+        No-op on every other platform; every call is guarded because older
+        Windows builds lack the function outright.
+        """
+        if sys.platform != "win32":
+            return
+        import ctypes
+
+        try:
+            user32 = ctypes.windll.user32
+            # Tk on Windows wraps the real toplevel in a shell window; the
+            # parent is what DWM styles.
+            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            value = ctypes.c_int(1 if dark else 0)
+            # DWMWA_USE_IMMERSIVE_DARK_MODE == 20
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 20, ctypes.byref(value), ctypes.sizeof(value)
+            )
+            theme_name = b"DarkMode" if dark else b"LightMode"
+            ctypes.windll.uxtheme.SetWindowTheme(hwnd, theme_name, 1)
+        except (AttributeError, OSError, tk.TclError):  # pragma: no cover - older Win
+            pass  # DWM/uxtheme call unsupported (pre-Win10); keep the stock look
 
     def _build_body(self) -> None:
         body = ctk.CTkFrame(self, fg_color="transparent")
