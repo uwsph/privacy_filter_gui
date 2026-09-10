@@ -49,6 +49,9 @@ SPAN_ACCENT: dict[str, tuple[str, str]] = {
     "private_url": ("#175f8a", "#11507a"),
     "account_number": ("#7a5c00", "#6a4f00"),
     "secret": ("#9c2b2b", "#8d2020"),
+    # 'redacted' intentionally diverges from SPAN_BG: the lighter #8a8a85
+    # reads better as legible legend text on the dark pane than the #6a6a65
+    # swatch fill (see test_legend_accents_keep_the_dark_mode_hues_and_stay_distinct).
     REDACTED_LABEL: ("#8a8a85", "#45454f"),
 }
 
